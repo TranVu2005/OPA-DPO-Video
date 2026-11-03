@@ -1,0 +1,13 @@
+# Install torch first, matching the CUDA module (H200 = Hopper, needs CUDA 12.x), e.g.
+#   pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
+transformers==4.51.3
+peft==0.15.2
+accelerate>=1.3
+decord
+av
+pyyaml
+pillow
+numpy
+openai>=1.40
+pytest
+# optional: flash-attn (then model.attn_implementation=flash_attention_2), deepspeed, wandb

@@ -1,0 +1,11 @@
+[project]
+name = "opadpo-video"
+version = "0.1.0"
+description = "OPA-DPO (CVPR 2025) for video, on Qwen2.5-VL"
+requires-python = ">=3.10"
+
+[tool.setuptools]
+packages = ["opadpo_video"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

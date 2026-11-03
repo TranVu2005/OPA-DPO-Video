@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+work/
+runs/
+data/
+wandb/
+*.pt
+*.safetensors
+.venv/
+.pytest_cache/
+*.mp4

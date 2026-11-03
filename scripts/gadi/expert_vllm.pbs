@@ -1,0 +1,30 @@
+#!/bin/bash
+# Step 2 fully offline: serve an open VLM as the expert on the H200 node with vLLM,
+# then query it through the same OpenAI-compatible client.
+# Needs a separate venv with vllm ($VLLM_VENV) and the expert weights downloaded on a login node:
+#   huggingface-cli download Qwen/Qwen2.5-VL-72B-Instruct --local-dir $HF_HOME/models/Qwen2.5-VL-72B-Instruct
+# Note: a weaker expert than GPT-4V gives noisier revisions; spot-check work/reports.jsonl.
+#PBS -P ab12
+#PBS -q gpuhopper
+#PBS -l ngpus=4
+#PBS -l ncpus=48
+#PBS -l mem=480GB
+#PBS -l jobfs=100GB
+#PBS -l walltime=10:00:00
+#PBS -l storage=gdata/ab12+scratch/ab12
+#PBS -l wd
+#PBS -j oe
+set -euo pipefail
+source scripts/gadi/env.sh
+EXPERT=$HF_HOME/models/Qwen2.5-VL-72B-Instruct
+VLLM_VENV=${VLLM_VENV:-/g/data/$PROJECT_CODE/$USER/venvs/vllm}
+
+"$VLLM_VENV/bin/vllm" serve "$EXPERT" --served-model-name expert --tensor-parallel-size 4 \
+  --max-model-len 32768 --limit-mm-per-prompt image=16 --port 8000 > "$PBS_JOBFS/vllm.log" 2>&1 &
+VLLM_PID=$!
+trap 'kill $VLLM_PID' EXIT
+until curl -sf localhost:8000/v1/models > /dev/null; do sleep 10; done
+
+python -m opadpo_video.expert work_dir=work expert.base_url=http://localhost:8000/v1 \
+  expert.model=expert expert.workers=32
+python -m opadpo_video.build_dataset work_dir=work

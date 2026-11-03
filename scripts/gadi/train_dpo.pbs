@@ -1,0 +1,26 @@
+#!/bin/bash
+# Step 4: reference log-probs of pi_OPA, then OPA-DPO from the OPA adapter.
+#PBS -P ab12
+#PBS -q gpuhopper
+#PBS -l ngpus=4
+#PBS -l ncpus=48
+#PBS -l mem=480GB
+#PBS -l jobfs=100GB
+#PBS -l walltime=24:00:00
+#PBS -l storage=gdata/ab12+scratch/ab12
+#PBS -l wd
+#PBS -j oe
+set -euo pipefail
+source scripts/gadi/env.sh
+OPA=runs/opa/final
+
+if [ ! -d work/ref_logps ] || [ "$(ls work/ref_logps | wc -l)" -ne "$NGPUS" ]; then
+  torchrun --standalone --nproc-per-node "$NGPUS" -m opadpo_video.precompute_ref \
+    --adapter "$OPA" model.base_model="$BASE_MODEL" work_dir=work
+fi
+
+torchrun --standalone --nproc-per-node "$NGPUS" -m opadpo_video.train_dpo \
+  model.base_model="$BASE_MODEL" work_dir=work train.init_adapter="$OPA" train.output_dir=runs/opadpo \
+  train.num_train_epochs=4 train.learning_rate=1e-6 \
+  train.per_device_train_batch_size=1 train.gradient_accumulation_steps=$((32 / NGPUS)) \
+  dpo.loss_mode=paper
