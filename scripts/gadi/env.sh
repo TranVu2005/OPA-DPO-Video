@@ -14,7 +14,19 @@ export EH_ROOT=${EH_ROOT:-$S/runs/exp1/EventHallusion} # prepared by prep_eh in 
 export BASE_MODEL=Qwen/Qwen2.5-VL-7B-Instruct          # resolved from $HF_HOME (offline)
 
 module load python3/3.11.7 cuda/12.3.2
-source "$VENV/bin/activate"
+# Group rule (hn98): environments live as a conda-pack tarball in /g/data/hn98/envs and are unpacked
+# into $PBS_JOBFS inside the job, so nobody keeps a full env (tens of thousands of files) on scratch.
+# Falls back to the scratch venv while no tarball exists (login node, or before the env is packed).
+ENV_NAME=${ENV_NAME:-opadpo-video}
+ENV_TAR=${ENV_TAR:-/g/data/$PROJECT_CODE/envs/$ENV_NAME.tar.gz}
+if [ -n "${PBS_JOBFS:-}" ] && [ -f "$ENV_TAR" ]; then
+  mkdir -p "$PBS_JOBFS/$ENV_NAME"
+  tar -xzf "$ENV_TAR" -C "$PBS_JOBFS/$ENV_NAME"
+  source "$PBS_JOBFS/$ENV_NAME/bin/activate"
+  conda-unpack 2>/dev/null || true
+else
+  source "$VENV/bin/activate"
+fi
 cd "$ROOT"
 
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1         # compute nodes have no internet
