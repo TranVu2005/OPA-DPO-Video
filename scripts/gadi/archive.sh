@@ -5,6 +5,7 @@
 #   bash scripts/gadi/archive.sh
 set -uo pipefail
 source scripts/gadi/env.sh
+if [ "$(readlink -f "$OUT")" = "$(readlink -f "$ARCHIVE")" ]; then echo "OUT == ARCHIVE, nothing to copy"; exit 0; fi
 mkdir -p "$ARCHIVE"
 rsync -a --prune-empty-dirs \
   --exclude 'checkpoint-*' --exclude 'ref_logps_*' --exclude 'rollouts/' --exclude 'logs/' \
