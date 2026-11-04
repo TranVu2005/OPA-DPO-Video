@@ -13,18 +13,25 @@ export VH_ROOT=${VH_ROOT:-/scratch/jp09/dd9648/datasets_video_hallu/videohalluce
 export EH_ROOT=${EH_ROOT:-$S/runs/exp1/EventHallusion} # prepared by prep_eh in Adaptive-SEED's run.md
 export BASE_MODEL=Qwen/Qwen2.5-VL-7B-Instruct          # resolved from $HF_HOME (offline)
 
-module load python3/3.11.7 cuda/12.3.2
 # Group rule (hn98): environments live as a conda-pack tarball in /g/data/hn98/envs and are unpacked
 # into $PBS_JOBFS inside the job, so nobody keeps a full env (tens of thousands of files) on scratch.
 # Falls back to the scratch venv while no tarball exists (login node, or before the env is packed).
 ENV_NAME=${ENV_NAME:-opadpo-video}
 ENV_TAR=${ENV_TAR:-/g/data/$PROJECT_CODE/envs/$ENV_NAME.tar.gz}
 if [ -n "${PBS_JOBFS:-}" ] && [ -f "$ENV_TAR" ]; then
-  mkdir -p "$PBS_JOBFS/$ENV_NAME"
-  tar -xzf "$ENV_TAR" -C "$PBS_JOBFS/$ENV_NAME"
-  source "$PBS_JOBFS/$ENV_NAME/bin/activate"
-  conda-unpack 2>/dev/null || true
+  module load cuda/12.3.2                              # no python3 module: the env brings its own Python
+  ENV_DIR=$PBS_JOBFS/$ENV_NAME
+  if [ ! -f "$ENV_DIR/.unpacked" ]; then               # unpack once per job (archive.sh sources this again)
+    mkdir -p "$ENV_DIR"
+    tar -xzf "$ENV_TAR" -C "$ENV_DIR"
+  fi
+  case $- in *u*) _U=1;; *) _U=;; esac
+  set +u                                               # conda-pack's activate reads unset CONDA_PREFIX
+  source "$ENV_DIR/bin/activate"
+  if [ -n "$_U" ]; then set -u; fi
+  if [ ! -f "$ENV_DIR/.unpacked" ]; then conda-unpack && touch "$ENV_DIR/.unpacked"; fi
 else
+  module load python3/3.11.7 cuda/12.3.2
   source "$VENV/bin/activate"
 fi
 cd "$ROOT"
