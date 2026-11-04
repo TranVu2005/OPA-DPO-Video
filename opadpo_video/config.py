@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -173,11 +175,25 @@ def load_config(path: str | None, overrides: list[str] | None = None) -> Config:
     return cfg
 
 
-def cli(description: str, extra: callable | None = None) -> tuple[Config, argparse.Namespace]:
-    parser = argparse.ArgumentParser(description=description)
+_OVERRIDE = re.compile(r"^[A-Za-z_][\w.]*=")
+
+
+def split_overrides(argv: list[str]) -> tuple[list[str], list[str]]:
+    """Pull `key=value` overrides out of argv wherever they are, so an nargs="+" option
+    (e.g. --train_subsets temporal work_dir=...) cannot swallow them."""
+    over = [a for a in argv if _OVERRIDE.match(a)]
+    return [a for a in argv if not _OVERRIDE.match(a)], over
+
+
+def cli(description: str, extra: callable | None = None,
+        argv: list[str] | None = None) -> tuple[Config, argparse.Namespace]:
+    parser = argparse.ArgumentParser(description=description,
+                                     epilog="Any key=value argument is a dotted config override, "
+                                            "e.g. train.learning_rate=1e-6.")
     parser.add_argument("--config", default="configs/default.yaml")
     if extra:
         extra(parser)
-    parser.add_argument("overrides", nargs="*", help="dotted overrides, e.g. train.learning_rate=1e-6")
-    args = parser.parse_args()
-    return load_config(args.config, args.overrides), args
+    rest, overrides = split_overrides(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(rest)
+    args.overrides = overrides
+    return load_config(args.config, overrides), args

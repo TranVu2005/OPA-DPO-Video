@@ -138,3 +138,12 @@ def test_build_dataset_reference_only_has_no_gt(tmp_path, monkeypatch):
     sft, dpo = read_jsonl(work / "sft.jsonl"), read_jsonl(work / "dpo.jsonl")
     assert [r["id"] for r in sft] == ["t/1|basic#rev"] and sft[0]["response"] == "No. It is dry."
     assert dpo[0]["gt"] is None and "reference" not in sft[0]
+
+
+def test_cli_overrides_not_swallowed_by_nargs_plus():
+    from opadpo_video.config import cli
+
+    cfg, a = cli("t", lambda p: p.add_argument("--train_subsets", nargs="+", default=["temporal"]),
+                 argv=["--train_subsets", "temporal", "work_dir=/tmp/x", "dpo.beta=0.2", "--config=configs/default.yaml"])
+    assert a.train_subsets == ["temporal"]
+    assert cfg.work_dir == "/tmp/x" and cfg.dpo.beta == 0.2
