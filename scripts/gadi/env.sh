@@ -5,7 +5,7 @@ export S=/scratch/$PROJECT_CODE/$USER
 export ROOT=${ROOT:-$S/OPA-DPO-Video}                  # this repo
 export VENV=${VENV:-$S/venv}                           # shared with Adaptive-SEED
 export HF_HOME=${HF_HOME:-$S/hf_cache}                 # shared with Adaptive-SEED (Qwen already downloaded)
-export OUT=${OUT:-$ROOT/outputs}                       # all outputs stay inside the repo dir
+export OUT=${OUT:-/g/data/$PROJECT_CODE/$USER/OPA-DPO-Video/outputs}  # adapters, data, eval on gdata (big quota); override: OUT=...
 export DATA=$OUT/data                                  # prompts.jsonl, eval_vh.jsonl, split.json
 export WORK=$OUT/work                                  # rollouts, reports, sft/dpo jsonl, ref log-probs
 export VH_ROOT=${VH_ROOT:-/scratch/jp09/dd9648/datasets_video_hallu/videohallucer}
@@ -20,6 +20,7 @@ export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1         # compute nodes have no i
 export WANDB_MODE=offline
 export TMPDIR=${PBS_JOBFS:-/tmp}
 export OMP_NUM_THREADS=8 TOKENIZERS_PARALLELISM=false
+export PYTHONDONTWRITEBYTECODE=1                       # no .pyc: saves inodes on scratch
 export PYTHONPATH="$ROOT:${PYTHONPATH:-}"
 export NGPUS=${PBS_NGPUS:-1}
 mkdir -p "$DATA" "$WORK" "$OUT/logs"

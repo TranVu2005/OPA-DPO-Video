@@ -11,7 +11,7 @@
 #PBS -l mem=160GB
 #PBS -l jobfs=100GB
 #PBS -l walltime=04:00:00
-#PBS -l storage=scratch/hn98+scratch/jp09
+#PBS -l storage=scratch/hn98+scratch/jp09+gdata/hn98
 #PBS -l wd
 #PBS -j oe
 set -euo pipefail
