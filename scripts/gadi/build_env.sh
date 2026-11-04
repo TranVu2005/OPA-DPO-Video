@@ -1,6 +1,6 @@
 #!/bin/bash
 # Build the env in $PBS_JOBFS (not scratch) and pack it to /g/data/hn98/envs. Run inside a copyq job:
-#   qsub -I -P hn98 -q copyq -l ncpus=4,jobfs=40GB,mem=32GB,walltime=02:00:00,storage=scratch/hn98+gdata/hn98
+#   qsub -I -P hn98 -q copyq -l ncpus=1,jobfs=40GB,mem=32GB,walltime=02:00:00,storage=scratch/hn98+gdata/hn98
 #   cd /scratch/hn98/$USER/OPA-DPO-Video && bash scripts/gadi/build_env.sh
 set -euo pipefail
 : "${PBS_JOBFS:?run inside a PBS job (copyq)}"
