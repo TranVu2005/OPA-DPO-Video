@@ -5,7 +5,8 @@ export S=/scratch/$PROJECT_CODE/$USER
 export ROOT=${ROOT:-$S/OPA-DPO-Video}                  # this repo
 export VENV=${VENV:-$S/venv}                           # shared with Adaptive-SEED
 export HF_HOME=${HF_HOME:-$S/hf_cache}                 # shared with Adaptive-SEED (Qwen already downloaded)
-export OUT=${OUT:-/g/data/$PROJECT_CODE/$USER/OPA-DPO-Video/outputs}  # adapters, data, eval on gdata (big quota); override: OUT=...
+export OUT=${OUT:-$ROOT/outputs}                       # working dir on scratch (fast, temporary)
+export ARCHIVE=${ARCHIVE:-/g/data/$PROJECT_CODE/$USER/OPA-DPO-Video/outputs}  # kept on gdata by archive.sh
 export DATA=$OUT/data                                  # prompts.jsonl, eval_vh.jsonl, split.json
 export WORK=$OUT/work                                  # rollouts, reports, sft/dpo jsonl, ref log-probs
 export VH_ROOT=${VH_ROOT:-/scratch/jp09/dd9648/datasets_video_hallu/videohallucer}

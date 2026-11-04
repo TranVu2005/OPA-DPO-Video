@@ -23,3 +23,5 @@ fi
 python -m opadpo_video.train_opa "${COMMON[@]}" train.output_dir="$OUT/$NAME" \
   train.num_train_epochs=2 train.learning_rate=2e-5 \
   train.per_device_train_batch_size=1 train.gradient_accumulation_steps=$((128 / NGPUS))
+
+bash scripts/gadi/archive.sh || true

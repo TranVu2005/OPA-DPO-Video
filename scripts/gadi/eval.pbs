@@ -23,3 +23,5 @@ if [ "$NAME" != base ]; then EXTRA+=(--baseline "$OUT/eval/base/margins.jsonl");
 if [ -d "$EH_ROOT/questions" ]; then EXTRA+=(--eh_root "$EH_ROOT"); fi
 python -m opadpo_video.evaluate --name "$NAME" --vh "$DATA/eval_vh.jsonl" --out "$OUT/eval" \
   "${EXTRA[@]}" "${COMMON[@]}"
+
+bash scripts/gadi/archive.sh || true
