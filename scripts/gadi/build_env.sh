@@ -5,8 +5,11 @@
 set -euo pipefail
 : "${PBS_JOBFS:?run inside a PBS job (copyq)}"
 NAME=${ENV_NAME:-opadpo-video}
+# The group conda base is read-only: keep every cache in jobfs (not in it, not in the small $HOME).
+export CONDA_PKGS_DIRS=$PBS_JOBFS/conda_pkgs PIP_CACHE_DIR=$PBS_JOBFS/pip_cache TMPDIR=$PBS_JOBFS/tmp
+mkdir -p "$CONDA_PKGS_DIRS" "$PIP_CACHE_DIR" "$TMPDIR"
 source /g/data/hn98/mini3/etc/profile.d/conda.sh
-conda create -y -p "$PBS_JOBFS/$NAME" python=3.11
+conda create -y -p "$PBS_JOBFS/$NAME" --override-channels -c conda-forge python=3.11
 conda activate "$PBS_JOBFS/$NAME"
 pip install -r scripts/gadi/env_requirements.txt
 pip install conda-pack
