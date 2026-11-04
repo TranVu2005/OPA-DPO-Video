@@ -1,8 +1,8 @@
 #!/bin/bash
 # Yes/no evaluation on VH val/test + EventHallusion, same protocol as Adaptive-SEED.
 #   qsub -v NAME=base scripts/gadi/eval.pbs                       (run first: reference for w2c / c2w)
-#   qsub -v NAME=opa,ADAPTER=/scratch/hn98/$USER/runs/opadpo/opa/final scripts/gadi/eval.pbs
-#   qsub -v NAME=opadpo_pixel,ADAPTER=/scratch/hn98/$USER/runs/opadpo/opadpo_pixel/final scripts/gadi/eval.pbs
+#   qsub -v NAME=opa,ADAPTER=$OUT/opa/final scripts/gadi/eval.pbs
+#   qsub -v NAME=opadpo_pixel,ADAPTER=$OUT/opadpo_pixel/final scripts/gadi/eval.pbs
 #PBS -N opadpo_eval
 #PBS -P hn98
 #PBS -q gpuhopper

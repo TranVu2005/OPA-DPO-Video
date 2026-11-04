@@ -5,7 +5,7 @@ export S=/scratch/$PROJECT_CODE/$USER
 export ROOT=${ROOT:-$S/OPA-DPO-Video}                  # this repo
 export VENV=${VENV:-$S/venv}                           # shared with Adaptive-SEED
 export HF_HOME=${HF_HOME:-$S/hf_cache}                 # shared with Adaptive-SEED (Qwen already downloaded)
-export OUT=${OUT:-$S/runs/opadpo}                      # all outputs of this project
+export OUT=${OUT:-$ROOT/outputs}                       # all outputs stay inside the repo dir
 export DATA=$OUT/data                                  # prompts.jsonl, eval_vh.jsonl, split.json
 export WORK=$OUT/work                                  # rollouts, reports, sft/dpo jsonl, ref log-probs
 export VH_ROOT=${VH_ROOT:-/scratch/jp09/dd9648/datasets_video_hallu/videohallucer}
@@ -22,7 +22,7 @@ export TMPDIR=${PBS_JOBFS:-/tmp}
 export OMP_NUM_THREADS=8 TOKENIZERS_PARALLELISM=false
 export PYTHONPATH="$ROOT:${PYTHONPATH:-}"
 export NGPUS=${PBS_NGPUS:-1}
-mkdir -p "$DATA" "$WORK" "$S/logs"
+mkdir -p "$DATA" "$WORK" "$OUT/logs"
 
 # Arguments every stage shares.
 COMMON=(model.base_model="$BASE_MODEL" work_dir="$WORK")

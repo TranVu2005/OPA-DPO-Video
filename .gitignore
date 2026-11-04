@@ -9,3 +9,5 @@ wandb/
 .venv/
 .pytest_cache/
 *.mp4
+outputs/
+*.o[0-9]*
