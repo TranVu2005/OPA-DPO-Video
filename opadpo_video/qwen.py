@@ -161,9 +161,18 @@ def collate_rows(rows: list[Row], pad_id: int) -> tuple[dict, list[int]]:
         "video_grid_thw": torch.cat([r.prompt["video_grid_thw"] for r in rows]),
     }
     if all("second_per_grid_ts" in r.prompt for r in rows):
-        ts = [r.prompt["second_per_grid_ts"] for r in rows]
-        batch["second_per_grid_ts"] = torch.cat([torch.as_tensor(t).reshape(-1) for t in ts])
+        # Python floats, as the HF processor returns them: get_rope_index multiplies them with a
+        # CPU arange, so a CUDA tensor here raises "Expected all tensors to be on the same device".
+        batch["second_per_grid_ts"] = [float(x) for r in rows
+                                       for x in torch.as_tensor(r.prompt["second_per_grid_ts"]).reshape(-1).tolist()]
     return batch, [len(r.response_ids) for r in rows]
+
+
+def to_device(batch: dict, device) -> dict:
+    """Move tensors to `device` (video in bf16); non-tensors such as second_per_grid_ts stay as is."""
+    out = {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in batch.items()}
+    out["pixel_values_videos"] = out["pixel_values_videos"].to(torch.bfloat16)
+    return out
 
 
 # ----------------------------------------------------------------------------- log-probs
@@ -190,8 +199,7 @@ def _lm_head_last(model, keep: int):
 def response_logprobs(model, batch: dict, resp_lens: list[int]) -> list[torch.Tensor]:
     """Per-token log pi(y_i | x, m, y_<i) for each row's response (float32 list)."""
     device = next(p for p in model.parameters()).device
-    batch = {k: v.to(device) for k, v in batch.items()}
-    batch["pixel_values_videos"] = batch["pixel_values_videos"].to(torch.bfloat16)
+    batch = to_device(batch, device)
     keep = max(resp_lens) + 1
     if "logits_to_keep" in inspect.signature(_unwrap(model).forward).parameters:
         logits = model(**batch, use_cache=False, logits_to_keep=keep).logits
@@ -207,7 +215,6 @@ def response_logprobs(model, batch: dict, resp_lens: list[int]) -> list[torch.Te
 def last_logits(model, batch: dict) -> torch.Tensor:
     """Next-token logits after the prompt, (B, V) float32 (rows are left-padded, so position -1)."""
     device = next(p for p in model.parameters()).device
-    batch = {k: v.to(device) for k, v in batch.items()}
-    batch["pixel_values_videos"] = batch["pixel_values_videos"].to(torch.bfloat16)
+    batch = to_device(batch, device)
     with _lm_head_last(model, 1):
         return model(**batch, use_cache=False).logits[:, -1].float()

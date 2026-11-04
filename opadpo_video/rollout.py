@@ -15,7 +15,7 @@ import torch
 
 from .config import cli
 from .data import read_jsonl
-from .qwen import IM_END, Row, collate_rows, encode_prompt, load_model, load_processor, prepare_video
+from .qwen import IM_END, Row, collate_rows, encode_prompt, load_model, load_processor, prepare_video, to_device
 
 
 def main():
@@ -46,8 +46,7 @@ def main():
                 video, fps = prepare_video(r["video"], cfg)
                 rows.append(Row(encode_prompt(proc, r["prompt"], video, fps), []))
             batch, _ = collate_rows(rows, tok.pad_token_id)
-            batch = {k: v.to(model.device) for k, v in batch.items()}
-            batch["pixel_values_videos"] = batch["pixel_values_videos"].to(torch.bfloat16)
+            batch = to_device(batch, model.device)
             with torch.no_grad():
                 out = model.generate(
                     **batch, do_sample=True, temperature=rc.temperature, top_k=rc.top_k, top_p=rc.top_p,

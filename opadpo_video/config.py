@@ -158,7 +158,13 @@ def _set_dotted(cfg: Config, dotted: str, raw: str) -> None:
         obj = getattr(obj, p)
     if not hasattr(obj, leaf):
         raise KeyError(f"unknown config key {dotted!r}")
-    setattr(obj, leaf, yaml.safe_load(raw))
+    value, current = yaml.safe_load(raw), getattr(obj, leaf)
+    # YAML 1.1 reads "2e-5" (no dot) as a string; follow the default's type for numbers.
+    if isinstance(current, float) and isinstance(value, (int, str)) and not isinstance(value, bool):
+        value = float(value)
+    elif isinstance(current, int) and not isinstance(current, bool) and isinstance(value, str):
+        value = int(value)
+    setattr(obj, leaf, value)
 
 
 def load_config(path: str | None, overrides: list[str] | None = None) -> Config:

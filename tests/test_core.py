@@ -147,3 +147,13 @@ def test_cli_overrides_not_swallowed_by_nargs_plus():
                  argv=["--train_subsets", "temporal", "work_dir=/tmp/x", "dpo.beta=0.2", "--config=configs/default.yaml"])
     assert a.train_subsets == ["temporal"]
     assert cfg.work_dir == "/tmp/x" and cfg.dpo.beta == 0.2
+
+
+def test_override_numbers_follow_default_type():
+    from opadpo_video.config import load_config
+
+    cfg = load_config("configs/default.yaml", ["train.learning_rate=2e-5", "dpo.gamma_if=0",
+                                               "train.gradient_accumulation_steps=128"])
+    assert cfg.train.learning_rate == 2e-5 and isinstance(cfg.train.learning_rate, float)
+    assert cfg.dpo.gamma_if == 0.0 and isinstance(cfg.dpo.gamma_if, float)
+    assert cfg.train.gradient_accumulation_steps == 128
