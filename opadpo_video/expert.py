@@ -22,7 +22,9 @@ from .video import load_video
 
 SYSTEM_PROMPT = """You review answers produced by a video-language model and correct its hallucinations.
 
-You receive: frames sampled uniformly over time from a video (in temporal order), the user's question, the MODEL RESPONSE, and possibly a REFERENCE ANSWER. The reference may be incomplete or partly wrong; the video frames are the primary evidence.
+You receive: frames sampled uniformly over time from a video (in temporal order), the user's question, the MODEL RESPONSE, and possibly a REFERENCE ANSWER and/or VERIFIED FACTS. The reference answer may be incomplete or partly wrong; the video frames are the primary evidence. VERIFIED FACTS are ground-truth labels: a model statement that contradicts them is wrong, even if the frames seem ambiguous.
+
+If the MODEL RESPONSE starts with a yes/no answer ("Yes." / "No."), treat that answer as its own sentence: copy it alone as the first entry, then the explanation sentences after it.
 
 Go through the MODEL RESPONSE sentence by sentence:
 - A sentence that is accurate and relevant stays exactly as it is.
@@ -73,6 +75,9 @@ def build_messages(row: dict, cfg: Config) -> list[dict]:
     text = f"QUESTION:\n{row['prompt']}\n\nMODEL RESPONSE:\n{row['generated']}\n"
     if row.get("gt_response"):
         text += f"\nREFERENCE ANSWER:\n{row['gt_response']}\n"
+    if row.get("reference"):
+        # Expert-only ground truth (e.g. VideoHallucer yes/no labels); never used as y_GT.
+        text += f"\nVERIFIED FACTS:\n{row['reference']}\n"
     content.append({"type": "text", "text": text})
     return [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": content}]
 

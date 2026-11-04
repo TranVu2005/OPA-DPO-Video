@@ -6,12 +6,14 @@ Bản cài đặt lại **OPA-DPO** ("Mitigating Hallucinations in Large Vision-
 
 | Bước | Lệnh | Đầu ra |
 |---|---|---|
+| 0. Chuẩn bị dữ liệu theo đúng split của Adaptive-SEED | `python -m opadpo_video.prepare_videohallucer --root <VideoHallucer>` | `data/prompts.jsonl`, `data/eval_vh.jsonl`, `data/split.json` |
 | 1. Rollout y_Gen từ policy gốc (top-k 30, top-p 0.95, T=1) | `python -m opadpo_video.rollout --prompts data/prompts.jsonl` | `work/rollouts/rank*.jsonl` |
 | 2. Expert chấm từng câu (S_hal 1-4, loại lỗi) và sửa tối thiểu → y_Rev | `python -m opadpo_video.expert` | `work/reports.jsonl` |
 | 2b. Ghép dataset | `python -m opadpo_video.build_dataset` | `work/sft.jsonl`, `work/dpo.jsonl` |
 | 3. OPA: LoRA-SFT trên y_GT + y_Rev (Eq. 4) | `torchrun ... -m opadpo_video.train_opa` | `runs/opa/final` |
 | 4a. Log-prob tham chiếu của π_OPA | `torchrun ... -m opadpo_video.precompute_ref --adapter runs/opa/final` | `work/ref_logps/rank*.pt` |
 | 4b. OPA-DPO (Eq. 10), tiếp tục LoRA của OPA | `torchrun ... -m opadpo_video.train_dpo train.init_adapter=runs/opa/final` | `runs/opadpo/final` (LoRA adapter) |
+| 5. Đánh giá yes/no như Adaptive-SEED | `python -m opadpo_video.evaluate --name ... [--adapter ...]` | `runs/eval/<name>/results.csv` |
 
 Mọi tham số nằm trong [configs/default.yaml](configs/default.yaml). Có thể ghi đè bằng `key=value` trên dòng lệnh, ví dụ `dpo.beta=0.2 video.n_frames=32`.
 
@@ -24,7 +26,25 @@ Mọi tham số nằm trong [configs/default.yaml](configs/default.yaml). Có th
 ```
 
 - `gt_response` là câu trả lời tham chiếu, đóng vai trò y_GT. Paper lấy y_GT từ response được ưa thích của RLAIF-V. Với video có thể lấy caption chi tiết của LLaVA-Video-178K hoặc ShareGPT4Video. Trường này **không bắt buộc**: thiếu GT thì các cặp có y_GT bị bỏ, chỉ còn cặp Rev/Gen.
-- Nên dùng prompt mô tả hoặc câu hỏi mở có câu trả lời dài. OPA-DPO dựa vào việc sửa ảo giác ở từng câu, nên dữ liệu hỏi yes/no (như VideoHallucer) gần như không có câu để sửa. Các bộ yes/no đó nên để đánh giá.
+- `reference` là thông tin đúng **chỉ gửi cho expert**, không bao giờ được train. Expert coi đây là nhãn chắc chắn đúng.
+- Nên dùng prompt mô tả hoặc câu hỏi mở có câu trả lời dài. OPA-DPO dựa vào việc sửa ảo giác ở từng câu, nên câu trả lời chỉ có "Yes."/"No." không có gì để sửa.
+
+### Câu hỏi yes/no (ví dụ VideoHallucer)
+
+Dùng dạng "trả lời yes/no rồi giải thích", để câu trả lời vẫn dài nhiều câu. Đưa nhãn vào `reference`, **để trống `gt_response`**:
+
+```json
+{"id": "temporal/86|basic", "video": ".../v_7p99ez6MEeo.mp4",
+ "prompt": "Does 'they continue lobbing the ball over the net' happen later than 'a group of people are on a sandy volleyball field'?\nAnswer with yes or no, then explain why.",
+ "reference": "Correct answer to this question: yes."}
+```
+
+Lý do: nếu đặt `gt_response = "Yes."`, bước OPA sẽ dạy model trả lời cụt một chữ, và cặp (GT ≻ Gen) thành so 1 token với cả đoạn. Để trống thì dữ liệu chỉ dùng cặp Rev ≻ Gen và (Rev, m ≻ m′).
+
+Lưu ý thêm:
+- Giữ nguyên câu hỏi như lúc đánh giá, chỉ thêm đuôi yêu cầu giải thích. Đánh giá vẫn dùng đúng prompt `"\nAnswer with yes or no."`.
+- Expert được dặn tách "Yes."/"No." thành câu riêng, để câu đáp án sai nhận đúng trọng số W_hal.
+- Giữ cả câu hỏi basic và hallucination của cùng video (một câu đáp án "yes", một câu "no"), để model không học thiên lệch về một phía.
 - Paper dùng khoảng 4.8k mẫu.
 
 ## Ánh xạ paper → code
@@ -49,45 +69,93 @@ Mặc định `dpo.loss_mode=paper` theo paper. Đặt `dpo.loss_mode=official` 
 
 ### Phần thêm cho video (paper không có)
 
-- Mỗi video lấy `video.n_frames` frame đều theo thời gian. Processor nhận `fps` để mRoPE của Qwen2.5-VL có thông tin thời gian.
-- m′ là video bị che 30% pixel ở mỗi frame, phần bị che thay bằng màu trung bình của frame (`mask_method=pixel`). Có thêm hai kiểu che: `tube` (cùng vị trí pixel ở mọi frame) và `frame` (che nguyên frame, nhắm vào hiểu biết thời gian). Mask có seed theo `id`, nên lượt tính reference và lúc train che đúng cùng một chỗ.
+- **Tiền xử lý giống Adaptive-SEED:** 8 frame lấy đều theo thời gian, resize vuông 448×448 bằng PIL bicubic (`video.frame_size`), `fps = số frame / thời lượng` truyền cho processor để mRoPE có thông tin thời gian. Đặt `video.frame_size=null` để giữ tỉ lệ khung hình.
+- **Video méo m′** (`video.mask_method`), seed theo `id` nên lượt reference và lúc train méo đúng cùng chỗ:
+
+  | Kiểu | Phá gì |
+  |---|---|
+  | `pixel` (paper) | Che 30% pixel mỗi frame bằng màu trung bình |
+  | `tube` | Che cùng vị trí pixel ở mọi frame |
+  | `frame` | Che nguyên 30% số frame |
+  | `shuffle` | Xáo thứ tự các **cặp** frame (Qwen gộp 2 frame thành một token thời gian), không bao giờ giữ nguyên thứ tự |
+  | `reverse` | Đảo ngược thời gian |
+  | `freeze` | Lặp frame giữa, mất chuyển động |
+
 - Prompt cho expert ([expert.py](opadpo_video/expert.py)) được viết lại cho video. Có thêm loại lỗi `temporal error` (sai thứ tự, thời điểm hoặc số lần lặp của sự kiện), trọng số W_img = 3.0.
 - y_Gen giữ **nguyên văn bản policy sinh ra**. Mỗi câu expert chép lại được dò vị trí trong y_Gen (khớp chính xác, rồi bỏ qua khoảng trắng, rồi khớp mờ), và trọng số gán theo khoảng ký tự. Code gốc thì ghép lại y_Gen từ các câu expert chép.
 
 ## Thiết kế
 
-- **Reference tính trước.** π_OPA cố định suốt OPA-DPO, nên log-prob từng token của nó được tính một lần (`precompute_ref`). Nhờ vậy lúc train chỉ cần một model; reference forward một lần thay vì một lần mỗi epoch.
+- **Reference tính trước.** Reference cố định suốt DPO, nên log-prob từng token của nó được tính một lần (`precompute_ref`). Lúc train chỉ cần một model.
+- **Không dùng nhầm reference.** Mỗi thư mục `work/<dpo.ref_dir>/meta.json` ghi lại adapter, kiểu m′, số frame... đã dùng. `train_dpo` từ chối chạy nếu khác cấu hình hiện tại.
 - **Một forward mỗi bước.** Năm hàng (GT·m, Gen·m, Rev·m, GT·m′, Rev·m′) của mọi mẫu được gộp và pad trái trong một batch. Cách này an toàn với DDP và chỉ tính logits cho phần response.
 - Policy DPO **tiếp tục train chính LoRA của OPA**, như paper A.1.
 
-## Chạy trên Gadi (H200)
+## Thí nghiệm so sánh với Adaptive-SEED
+
+Mọi hàng dùng cùng Qwen2.5-VL-7B, cùng split VideoHallucer (`temporal` + `object_relation`, seed 0, 150/50/300 cặp), cùng 8 frame 448², cùng cách đánh giá.
+
+| Hàng | Cách chạy trên Gadi |
+|---|---|
+| Qwen2.5-VL gốc | `qsub -v NAME=base scripts/gadi/eval.pbs` |
+| Chỉ OPA (SFT) | `train_opa.pbs`, rồi eval với `ADAPTER=$OUT/opa/final` |
+| DPO thường (không OPA, không trọng số, không IF/anchor) | `qsub -v PLAIN=1 scripts/gadi/train_dpo.pbs` |
+| OPA-DPO bản paper (m′ = pixel) | `qsub scripts/gadi/train_dpo.pbs` |
+| OPA-DPO với m′ theo thời gian | `qsub -v MASK=shuffle` (hoặc `reverse`, `freeze`) `scripts/gadi/train_dpo.pbs` |
+| SFT yes/no (không expert) | `qsub -v BINARY=1 scripts/gadi/train_opa.pbs` |
+| DPO yes/no (không expert) | `qsub -v BINARY=1,GAMMA_IF=0 scripts/gadi/train_dpo.pbs` |
+| DPO yes/no + m′ (không expert) | `qsub -v BINARY=1,MASK=shuffle scripts/gadi/train_dpo.pbs` (hoặc `MASK=pixel`) |
+
+### Baseline yes/no không cần expert
+
+`build_binary.py` (chạy trong `prepare.sh`) tạo dữ liệu thẳng từ nhãn TRAIN của VideoHallucer, cùng split với SEED, vào `$OUT/work_binary`: prompt **giống hệt prompt đánh giá**, y_Rev = nhãn đúng ("Yes."/"No."), y_Gen = nhãn ngược lại, không có y_GT. Không có rollout, không có expert.
+
+Đây **không phải** OPA-DPO hay TL-DPO: với câu trả lời một token thì cả hai nhãn đều on-policy (bước OPA không còn gì để làm), trọng số theo câu và target span đều trùng với toàn bộ câu trả lời. Phần còn ý nghĩa là DPO trên nhãn và số hạng so sánh video gốc với video méo (L_IF). Khi báo cáo, gọi đúng tên "DPO yes/no" và "DPO yes/no + m′"; không dùng chúng để kết luận về OPA-DPO.
+
+`results.csv` có các dòng `VH_VAL`, `VH_TEST`, `VH_TEST_temporal`, `VH_TEST_object_relation`, `EH_ALL`, `eh_entire`, `eh_misleading`, `eh_mix`, với cột `q_acc`, `pair_acc`, `yes_rate`, và so với model gốc: `delta_pp`, `wrong_to_correct`, `correct_to_wrong`, `mean_abs_margin_change`. Định nghĩa giống `results.csv` của Adaptive-SEED.
+
+**Kiểm tra trước khi tin kết quả:** dòng `base` của repo này phải khớp dòng `base` trong `results.csv` của Adaptive-SEED (cùng `VH_TEST`, cùng `EH_ALL`). Nếu lệch, nghĩa là tiền xử lý hoặc prompt chưa giống, phải sửa trước khi so sánh.
+
+## Chạy trên Gadi (1 H200, giống `run.md` của Adaptive-SEED)
+
+Đường dẫn (sửa trong [scripts/gadi/env.sh](scripts/gadi/env.sh) nếu khác):
+
+| Mục | Giá trị |
+|---|---|
+| Project / queue | `hn98`, `gpuhopper`, 1 GPU, 12 CPU, 160 GB |
+| Code | `/scratch/hn98/$USER/OPA-DPO-Video` |
+| venv, HF cache | Dùng chung với Adaptive-SEED: `/scratch/hn98/$USER/venv`, `/scratch/hn98/$USER/hf_cache` |
+| VideoHallucer | `/scratch/jp09/dd9648/datasets_video_hallu/videohallucer` (chỉ đọc) |
+| EventHallusion | `/scratch/hn98/$USER/runs/exp1/EventHallusion` (đã dựng bằng `prep_eh` của Adaptive-SEED) |
+| Đầu ra | `/scratch/hn98/$USER/runs/opadpo/{data,work,work_binary,opa,opadpo_*,binary_*,eval}` |
 
 ```bash
-# Trên login node (có internet), một lần:
-PROJECT_CODE=ab12 bash scripts/gadi/setup.sh
-# Sửa PROJECT_CODE trong scripts/gadi/env.sh và dòng #PBS -P / storage trong các file .pbs
+# Login node (có internet), một lần, sau mục 1.2-1.3 của run.md Adaptive-SEED:
+cd /scratch/hn98/$USER/OPA-DPO-Video
+bash scripts/gadi/setup.sh            # cài thêm openai, av, pyyaml vào venv chung
+bash scripts/gadi/prepare.sh          # split giống SEED, prompts.jsonl, eval_vh.jsonl
 
-qsub scripts/gadi/rollout.pbs                 # 1
-qsub scripts/gadi/expert_copyq.pbs            # 2 + 2b, API qua copyq (có internet)
-#   hoặc qsub scripts/gadi/expert_vllm.pbs    #   expert chạy offline bằng vLLM trên H200
-qsub scripts/gadi/train_opa.pbs               # 3
-qsub scripts/gadi/train_dpo.pbs               # 4a + 4b
+qsub -v NAME=base scripts/gadi/eval.pbs   # mốc; so với dòng base của SEED
+qsub scripts/gadi/rollout.pbs             # 1
+qsub scripts/gadi/expert_copyq.pbs        # 2 + 2b (API, cần ~/.opadpo_key)
+#   hoặc qsub scripts/gadi/expert_vllm.pbs   (Qwen2.5-VL-72B-AWQ offline)
+qsub scripts/gadi/train_opa.pbs           # 3
+qsub scripts/gadi/train_dpo.pbs           # 4 (thêm -v MASK=... hoặc -v PLAIN=1 cho các hàng khác)
+qsub -v NAME=opadpo_pixel,ADAPTER=/scratch/hn98/$USER/runs/opadpo/opadpo_pixel/final scripts/gadi/eval.pbs
 ```
 
-Ghi chú Gadi:
-- **Node tính toán không có internet.** Model phải tải trước về `/g/data`, và `env.sh` đặt `HF_HUB_OFFLINE=1`. Bước gọi API expert chạy ở `copyq`, hoặc dùng `expert_vllm.pbs` để chạy expert là model mở ngay trên node GPU.
-- **Tên queue H200** (`gpuhopper`), số CPU và RAM mỗi GPU trong các file `.pbs` là giá trị phỏng đoán. Hãy kiểm tra bằng `nqstat` và tài liệu NCI rồi sửa.
-- Môi trường dùng CUDA 12.4, torch 2.6, transformers 4.51.3, peft 0.15.2 (giống Adaptive-SEED). Môi trường gốc của OPA-DPO (CUDA 11.7, torch 2.0) không hỗ trợ Hopper.
-- Bộ nhớ: mặc định 16 frame × 448² và batch 1 mỗi GPU, có gradient checkpointing. H200 141GB còn dư, có thể tăng `video.n_frames`.
-- Mọi bước đều chạy lại được khi job bị ngắt: rollout và expert bỏ qua các `id` đã xong, còn train tự resume từ checkpoint mới nhất.
+Ghi chú:
+- **Node GPU không có internet.** Model đọc từ `hf_cache` với `HF_HUB_OFFLINE=1`. Bước gọi API expert chạy ở `copyq`.
+- Theo dõi: `qstat -u $USER`, log ở `opadpo_*.o<jobid>` trong thư mục repo.
+- Mọi bước chạy lại được khi job bị ngắt: rollout, expert, evaluate bỏ qua các `id` đã xong; train tự resume từ checkpoint mới nhất.
+- `prepare.sh` mặc định lấy prompt từ cặp train của `temporal` (yes/no + giải thích, cộng 4 prompt mô tả thời gian cho mỗi video). Đổi bằng `TRAIN_SUBSETS="temporal object_relation" DESCRIBE=2 bash scripts/gadi/prepare.sh`.
+- Dữ liệu train nhỏ (vài trăm video), xa so với 4.8k mẫu của paper. Xem thêm phần thảo luận về nguồn video ngoài trước khi báo cáo kết quả chính.
 
 ## Test
 
 ```bash
-pytest -q                                    # loss, trọng số, mask (CPU, không cần model)
-OPADPO_SMOKE=1 pytest -q tests/test_smoke_qwen.py   # Qwen2.5-VL thu nhỏ, chạy end-to-end trên CPU (~8 phút)
+pytest -q                                           # CPU: loss, trọng số, mask, split giống SEED, chỉ số đánh giá
+OPADPO_SMOKE=1 pytest -q tests/test_smoke_qwen.py   # Qwen2.5-VL thu nhỏ, chạy end-to-end trên CPU
 ```
 
-## Đánh giá
-
-Repo này chưa có script benchmark. Dùng `runs/opadpo/final` (một LoRA adapter, nạp bằng `PeftModel.from_pretrained`) với các bộ đánh giá video ảo giác, ví dụ VideoHallucer và EventHallusion trong `../Adaptive-SEED-`. Nên có thêm một benchmark caption hoặc mô tả, vì OPA-DPO tối ưu cho câu trả lời dài.
+`tests/test_protocol.py` gọi thẳng code chia dữ liệu của `../Adaptive-SEED-` trên một bộ VideoHallucer giả và kiểm tra split giống hệt (bỏ qua nếu không có thư mục đó).

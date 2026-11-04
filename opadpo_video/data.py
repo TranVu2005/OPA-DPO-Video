@@ -1,7 +1,8 @@
 """Datasets and collators for the OPA (SFT) and OPA-DPO stages.
 
 File formats (JSONL, one object per line):
-  prompts.jsonl : {"id", "video", "prompt", "gt_response"?}
+  prompts.jsonl : {"id", "video", "prompt", "gt_response"?, "reference"?}
+                  gt_response = y_GT (trained on); reference = facts shown to the expert only
   sft.jsonl     : {"id", "video", "prompt", "response"}
   dpo.jsonl     : {"id", "video", "prompt", "gt"|null, "gen", "gen_finished",
                    "rev", "gen_spans", "rev_spans"}

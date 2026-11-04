@@ -29,12 +29,18 @@ class ModelConfig:
 
 @dataclass
 class VideoConfig:
-    n_frames: int = 16  # must be even: Qwen2.5-VL merges frames in temporal pairs
-    max_pixels: int = 448 * 448  # per frame, passed to the processor
+    n_frames: int = 8  # must be even: Qwen2.5-VL merges frames in temporal pairs (8 = Adaptive-SEED exp1)
+    # Square resize with PIL bicubic, exactly as Adaptive-SEED does (multiple of 28).
+    # null keeps the aspect ratio and uses min/max_pixels instead.
+    frame_size: int | None = 448
+    max_pixels: int = 448 * 448  # per frame, only when frame_size is null
     min_pixels: int = 128 * 28 * 28
-    # Distorted video m' for the image-focus loss (Eq. 8): mask this fraction of pixels.
+    # Distorted video m' for the image-focus loss (Eq. 8).
+    # Spatial: "pixel" = random pixels per frame (paper), "tube" = same pixels in every frame,
+    #          "frame" = whole frames blanked (mask_ratio applies to these three).
+    # Temporal: "shuffle" = frame pairs in a random non-identity order, "reverse" = time reversed,
+    #           "freeze" = the middle frame repeated (no motion).
     mask_ratio: float = 0.3
-    # "pixel": random pixels per frame (paper), "frame": whole frames, "tube": same pixels in every frame.
     mask_method: str = "pixel"
 
 
@@ -102,6 +108,11 @@ class DPOConfig:
     gamma_if: float = 0.2  # gamma_1, image-focus weight
     gamma_anc: float = 1.0  # gamma_2, anchor weight
     delta: float = 0.0  # anchor value
+    # False: every token weight is 1 (no W_hal / W_img), e.g. for a plain-DPO baseline.
+    use_weights: bool = True
+    # Sub-directory of work_dir holding the reference log-probs. Use a different one per
+    # reference policy (pi_OPA vs the base model), so runs never mix them.
+    ref_dir: str = "ref_logps"
     # "paper": sequence-level Eq. (7)-(10).
     # "official": token-level loss and anchor signs of the released code (dpo_trainer.py).
     loss_mode: str = "paper"

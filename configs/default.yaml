@@ -13,11 +13,12 @@ model:
   lora_vision: true                          # LoRA on ViT + merger too, as the paper wraps the whole backbone
 
 video:                                       # video additions (not in the paper)
-  n_frames: 16                               # even; Qwen2.5-VL merges frames in pairs
-  max_pixels: 200704                         # 448*448 per frame
+  n_frames: 8                                # even; = Adaptive-SEED exp1 (student 8 frames)
+  frame_size: 448                            # square PIL bicubic resize, as Adaptive-SEED; null = keep aspect
+  max_pixels: 200704                         # 448*448 per frame (only when frame_size is null)
   min_pixels: 100352                         # 128*28*28
-  mask_ratio: 0.3                            # distorted m': 30% pixels -> mean colour
-  mask_method: pixel                         # pixel | tube | frame
+  mask_ratio: 0.3                            # spatial m': 30% pixels -> mean colour
+  mask_method: pixel                         # spatial: pixel | tube | frame ; temporal: shuffle | reverse | freeze
 
 rollout:
   max_new_tokens: 1024
@@ -53,7 +54,7 @@ train:                                       # OPA stage values; train_dpo.pbs o
   lr_scheduler_type: cosine
   warmup_ratio: 0.03
   per_device_train_batch_size: 1
-  gradient_accumulation_steps: 32            # 4 GPUs x 1 x 32 = 128 (paper)
+  gradient_accumulation_steps: 128           # 1 H200 x 1 x 128 = 128 (paper); PBS scripts set it
   max_response_tokens: 1024
   save_steps: 100
   logging_steps: 1
@@ -68,4 +69,6 @@ dpo:
   gamma_anc: 1.0
   delta: 0.0
   loss_mode: paper                           # paper | official (token-level, as released code)
+  use_weights: true                          # false = all token weights 1 (plain-DPO baseline)
+  ref_dir: ref_logps                         # one directory per reference policy / m'
   official_response_len: 896

@@ -1,18 +1,21 @@
 #!/bin/bash
-# Step 2 with a hosted API (GPT-4o / Gemini / Azure). copyq nodes have internet.
-# Put the key in ~/.opadpo_key (chmod 600), never in this file.
-#PBS -P ab12
+# Step 2 + 2b with a hosted API (GPT-4o / Gemini / Azure). copyq nodes have internet, no GPU.
+# Key in ~/.opadpo_key (chmod 600), never in this file.
+#   qsub scripts/gadi/expert_copyq.pbs
+#   qsub -v EXPERT_MODEL=gpt-4.1 scripts/gadi/expert_copyq.pbs
+#PBS -N opadpo_expert
+#PBS -P hn98
 #PBS -q copyq
 #PBS -l ncpus=1
-#PBS -l mem=8GB
+#PBS -l mem=16GB
 #PBS -l walltime=10:00:00
-#PBS -l storage=gdata/ab12+scratch/ab12
+#PBS -l storage=scratch/hn98+scratch/jp09
 #PBS -l wd
 #PBS -j oe
 set -euo pipefail
 source scripts/gadi/env.sh
 unset HF_HUB_OFFLINE TRANSFORMERS_OFFLINE
-export OPENAI_API_KEY=$(cat ~/.opadpo_key)
-
-python -m opadpo_video.expert work_dir=work expert.model=gpt-4o
-python -m opadpo_video.build_dataset work_dir=work
+OPENAI_API_KEY=$(cat ~/.opadpo_key)
+export OPENAI_API_KEY
+python -m opadpo_video.expert "${COMMON[@]}" expert.model="${EXPERT_MODEL:-gpt-4o}"
+python -m opadpo_video.build_dataset "${COMMON[@]}"

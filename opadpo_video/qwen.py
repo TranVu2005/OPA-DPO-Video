@@ -11,6 +11,7 @@ import inspect
 from contextlib import contextmanager
 from dataclasses import dataclass
 
+import numpy as np
 import torch
 import torch.nn.functional as F
 
@@ -86,12 +87,26 @@ def target_size(h: int, w: int, cfg: Config) -> tuple[int, int]:
     return smart_resize(h, w, factor=28, min_pixels=cfg.video.min_pixels, max_pixels=cfg.video.max_pixels)
 
 
+def _resize_square_pil(video: torch.Tensor, size: int) -> torch.Tensor:
+    """Same resize as Adaptive-SEED's decoder: PIL RGB, (size, size), bicubic."""
+    from PIL import Image
+
+    frames = [
+        np.asarray(Image.fromarray(f).convert("RGB").resize((size, size), Image.BICUBIC))
+        for f in video.permute(0, 2, 3, 1).numpy()
+    ]
+    return torch.from_numpy(np.stack(frames)).permute(0, 3, 1, 2).contiguous()
+
+
 def prepare_video(path: str, cfg: Config, masked: bool = False, sample_id: str = "") -> tuple[torch.Tensor, float]:
     """Decode, resize to the processor grid (so the mask is applied at final resolution), mask if asked."""
     video, fps = load_video(path, cfg.video.n_frames)
-    h, w = target_size(video.shape[-2], video.shape[-1], cfg)
-    video = F.interpolate(video.float(), size=(h, w), mode="bicubic", align_corners=False)
-    video = video.round().clamp(0, 255).to(torch.uint8)
+    if cfg.video.frame_size:
+        video = _resize_square_pil(video, cfg.video.frame_size)
+    else:
+        h, w = target_size(video.shape[-2], video.shape[-1], cfg)
+        video = F.interpolate(video.float(), size=(h, w), mode="bicubic", align_corners=False)
+        video = video.round().clamp(0, 255).to(torch.uint8)
     if masked:
         video = mask_video(video, cfg.video.mask_ratio, cfg.video.mask_method, sample_seed(sample_id))
     return video, fps
@@ -187,3 +202,12 @@ def response_logprobs(model, batch: dict, resp_lens: list[int]) -> list[torch.Te
     labels = batch["input_ids"][:, -(keep - 1):]
     logps = torch.gather(F.log_softmax(logits, dim=-1), 2, labels.unsqueeze(-1)).squeeze(-1)
     return [logps[i, logps.shape[1] - n:] for i, n in enumerate(resp_lens)]
+
+
+def last_logits(model, batch: dict) -> torch.Tensor:
+    """Next-token logits after the prompt, (B, V) float32 (rows are left-padded, so position -1)."""
+    device = next(p for p in model.parameters()).device
+    batch = {k: v.to(device) for k, v in batch.items()}
+    batch["pixel_values_videos"] = batch["pixel_values_videos"].to(torch.bfloat16)
+    with _lm_head_last(model, 1):
+        return model(**batch, use_cache=False).logits[:, -1].float()

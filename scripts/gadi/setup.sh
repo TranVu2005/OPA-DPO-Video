@@ -1,20 +1,17 @@
 #!/bin/bash
-# Run ONCE on a Gadi login node (has internet): venv + packages + model download.
-#   PROJECT_CODE=ab12 bash scripts/gadi/setup.sh
+# Run ONCE on a Gadi login node (has internet), AFTER sections 1.2-1.3 of Adaptive-SEED's run.md
+# (shared venv with transformers 4.51.3 / peft 0.15.2, Qwen2.5-VL-7B in the HF cache).
+#   cd /scratch/hn98/$USER && git clone <this repo> OPA-DPO-Video && cd OPA-DPO-Video
+#   bash scripts/gadi/setup.sh
 set -euo pipefail
-export PROJECT_CODE=${PROJECT_CODE:?set PROJECT_CODE}
-VENV=${VENV:-/g/data/$PROJECT_CODE/$USER/venvs/opadpo-video}
-HF_HOME=/g/data/$PROJECT_CODE/$USER/hf
+S=/scratch/hn98/$USER
+module load python3/3.11.7 cuda/12.3.2
+source "$S/venv/bin/activate"
+export HF_HOME=$S/hf_cache PIP_CACHE_DIR=$S/pip_cache
 
-module load python3/3.11.7 cuda/12.4.1 2>/dev/null || module load python3 cuda
-python3 -m venv "$VENV"
-source "$VENV/bin/activate"
-pip install --upgrade pip
-pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cu124
-pip install -r requirements.txt
-# Optional, faster attention on H200 (long build; skip if it fails):
-# MAX_JOBS=8 pip install flash-attn --no-build-isolation
-
-export HF_HOME
-huggingface-cli download Qwen/Qwen2.5-VL-7B-Instruct --local-dir "$HF_HOME/models/Qwen2.5-VL-7B-Instruct"
+pip install openai av pyyaml decord          # only what Adaptive-SEED's venv lacks
 python -c "import torch, transformers, peft; print(torch.__version__, transformers.__version__, peft.__version__)"
+if ! ls "$HF_HOME/hub" | grep -q "models--Qwen--Qwen2.5-VL-7B-Instruct"; then
+  huggingface-cli download Qwen/Qwen2.5-VL-7B-Instruct
+fi
+echo "OK. Next: bash scripts/gadi/prepare.sh"

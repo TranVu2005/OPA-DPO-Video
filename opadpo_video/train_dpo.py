@@ -6,6 +6,11 @@
 Paper settings: 4 epochs, lr 1e-6 cosine, global batch 32, beta 0.1, gamma1 0.2,
 gamma2 1.0, delta 0, 30% pixel mask. The reference is pi_OPA, whose log-probs come from
 precompute_ref.py.
+
+Plain DPO baseline without OPA (reference = base model, fresh LoRA, no token weights,
+no image-focus / anchor terms):
+  python -m opadpo_video.train_dpo train.init_adapter=null dpo.ref_dir=ref_logps_base \
+      dpo.use_weights=false dpo.gamma_if=0 dpo.gamma_anc=0 train.output_dir=runs/dpo_plain
 """
 from __future__ import annotations
 
@@ -32,7 +37,8 @@ class OPADPOTrainer(Trainer):
         logps = response_logprobs(model, inputs["batch"], inputs["lens"])
         pol = unpack_slots(logps, inputs["slots"], n)
         ref = {role: [r.get(role) for r in inputs["ref"]] for role in ROLES}
-        loss, metrics = opa_dpo_loss(pol, ref, inputs["w"], self.opa_cfg.dpo)
+        w = inputs["w"] if self.opa_cfg.dpo.use_weights else {k: [None] * n for k in inputs["w"]}
+        loss, metrics = opa_dpo_loss(pol, ref, w, self.opa_cfg.dpo)
         for k, v in metrics.items():
             self._metrics[k].append(v)
         return loss
@@ -46,11 +52,13 @@ class OPADPOTrainer(Trainer):
 
 def main():
     cfg, args = cli(__doc__, lambda p: p.add_argument("--data", default=None, help="default: work/dpo.jsonl"))
-    if not cfg.train.init_adapter:
-        raise SystemExit("set train.init_adapter to the OPA adapter (pi_OPA is the initial and reference policy)")
+    adapter = cfg.train.init_adapter or None
+    if adapter is None:
+        print("train.init_adapter is null: plain DPO from the base model with a fresh LoRA (reference = base)")
+    # The reference must be the initial policy: pi_OPA for OPA-DPO, the base model otherwise.
+    ref = load_ref_logps(cfg, adapter)
     proc = load_processor(cfg)
-    model = load_model(cfg, adapter=cfg.train.init_adapter, trainable=True)
-    ref = load_ref_logps(cfg.work)
+    model = load_model(cfg, adapter=adapter, trainable=True)
     data = DPODataset(args.data or cfg.work / "dpo.jsonl", proc, cfg, ref_logps=ref)
     missing = [r["id"] for r in data.rows if r["id"] not in ref]
     if missing:

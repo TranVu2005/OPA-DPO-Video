@@ -1,18 +1,16 @@
 #!/bin/bash
-# Step 1: rollouts from the base policy. Resubmit to resume.
-# Queue name / ncpus per GPU for the H200 nodes: check `nqstat` and the NCI Gadi queue docs.
-#PBS -P ab12
+# Step 1: rollouts of the base policy on $DATA/prompts.jsonl. Resubmit to resume.
+#PBS -N opadpo_rollout
+#PBS -P hn98
 #PBS -q gpuhopper
-#PBS -l ngpus=4
-#PBS -l ncpus=48
-#PBS -l mem=480GB
+#PBS -l ngpus=1
+#PBS -l ncpus=12
+#PBS -l mem=160GB
 #PBS -l jobfs=100GB
 #PBS -l walltime=10:00:00
-#PBS -l storage=gdata/ab12+scratch/ab12
+#PBS -l storage=scratch/hn98+scratch/jp09
 #PBS -l wd
 #PBS -j oe
 set -euo pipefail
 source scripts/gadi/env.sh
-
-torchrun --standalone --nproc-per-node "$NGPUS" -m opadpo_video.rollout \
-  --prompts data/prompts.jsonl model.base_model="$BASE_MODEL" work_dir=work
+python -m opadpo_video.rollout --prompts "$DATA/prompts.jsonl" "${COMMON[@]}"

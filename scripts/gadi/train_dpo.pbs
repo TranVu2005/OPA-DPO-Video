@@ -1,26 +1,49 @@
 #!/bin/bash
-# Step 4: reference log-probs of pi_OPA, then OPA-DPO from the OPA adapter.
-#PBS -P ab12
+# Step 4: reference log-probs + DPO. Variants (qsub -v, comma separated):
+#   MASK=pixel|shuffle|reverse|freeze|tube|frame   distorted video m' (default pixel = paper)
+#   PLAIN=1     plain DPO baseline: no OPA, reference = base, no token weights, no image-focus / anchor
+#   BINARY=1    expert-free yes/no baseline on $OUT/work_binary (from prepare.sh): reference = base,
+#               no token weights; keeps the image-focus term unless GAMMA_IF=0
+#   GAMMA_IF=x  image-focus weight for BINARY runs (default 0.2, as the paper)
+#
+#   qsub scripts/gadi/train_dpo.pbs                           -> $OUT/opadpo_pixel
+#   qsub -v MASK=shuffle scripts/gadi/train_dpo.pbs           -> $OUT/opadpo_shuffle
+#   qsub -v PLAIN=1 scripts/gadi/train_dpo.pbs                -> $OUT/dpo_plain
+#   qsub -v BINARY=1,GAMMA_IF=0 scripts/gadi/train_dpo.pbs    -> $OUT/binary_dpo           ("DPO yes/no")
+#   qsub -v BINARY=1,MASK=shuffle scripts/gadi/train_dpo.pbs  -> $OUT/binary_dpo_shuffle   ("DPO yes/no + m'")
+#PBS -N opadpo_dpo
+#PBS -P hn98
 #PBS -q gpuhopper
-#PBS -l ngpus=4
-#PBS -l ncpus=48
-#PBS -l mem=480GB
+#PBS -l ngpus=1
+#PBS -l ncpus=12
+#PBS -l mem=160GB
 #PBS -l jobfs=100GB
 #PBS -l walltime=24:00:00
-#PBS -l storage=gdata/ab12+scratch/ab12
+#PBS -l storage=scratch/hn98+scratch/jp09
 #PBS -l wd
 #PBS -j oe
 set -euo pipefail
 source scripts/gadi/env.sh
-OPA=runs/opa/final
-
-if [ ! -d work/ref_logps ] || [ "$(ls work/ref_logps | wc -l)" -ne "$NGPUS" ]; then
-  torchrun --standalone --nproc-per-node "$NGPUS" -m opadpo_video.precompute_ref \
-    --adapter "$OPA" model.base_model="$BASE_MODEL" work_dir=work
+MASK=${MASK:-pixel}
+if [ -n "${BINARY:-}" ]; then
+  WORK="$OUT/work_binary"
+  COMMON=(model.base_model="$BASE_MODEL" work_dir="$WORK")
+  GAMMA_IF=${GAMMA_IF:-0.2}
+  if [ "$GAMMA_IF" = 0 ]; then NAME=binary_dpo; else NAME=binary_dpo_$MASK; fi
+  ADAPTER=none; INIT=null; REF=ref_logps_base_$MASK
+  EXTRA=(dpo.use_weights=false dpo.gamma_if="$GAMMA_IF" dpo.gamma_anc=0)
+elif [ -n "${PLAIN:-}" ]; then
+  NAME=dpo_plain; ADAPTER=none; INIT=null; REF=ref_logps_base_$MASK
+  EXTRA=(dpo.use_weights=false dpo.gamma_if=0 dpo.gamma_anc=0)
+else
+  NAME=opadpo_$MASK; ADAPTER="$OUT/opa/final"; INIT="$ADAPTER"; REF=ref_logps_opa_$MASK
+  EXTRA=()
 fi
+ARGS=("${COMMON[@]}" video.mask_method="$MASK" dpo.ref_dir="$REF")
 
-torchrun --standalone --nproc-per-node "$NGPUS" -m opadpo_video.train_dpo \
-  model.base_model="$BASE_MODEL" work_dir=work train.init_adapter="$OPA" train.output_dir=runs/opadpo \
-  train.num_train_epochs=4 train.learning_rate=1e-6 \
-  train.per_device_train_batch_size=1 train.gradient_accumulation_steps=$((32 / NGPUS)) \
-  dpo.loss_mode=paper
+if [ ! -f "$WORK/$REF/meta.json" ]; then
+  python -m opadpo_video.precompute_ref --adapter "$ADAPTER" "${ARGS[@]}"
+fi
+python -m opadpo_video.train_dpo "${ARGS[@]}" "${EXTRA[@]}" train.init_adapter="$INIT" \
+  train.output_dir="$OUT/$NAME" train.num_train_epochs=4 train.learning_rate=1e-6 \
+  train.per_device_train_batch_size=1 train.gradient_accumulation_steps=$((32 / NGPUS))

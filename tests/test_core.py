@@ -91,3 +91,50 @@ def test_loss_without_gt_and_official_mode_run():
 def test_config_overrides(tmp_path):
     cfg = load_config(None, ["dpo.beta=0.2", "video.n_frames=8", "train.init_adapter=runs/opa/final"])
     assert cfg.dpo.beta == 0.2 and cfg.video.n_frames == 8 and cfg.train.init_adapter == "runs/opa/final"
+
+
+def test_expert_sees_reference_but_not_as_reference_answer(monkeypatch):
+    from opadpo_video import expert
+
+    monkeypatch.setattr(expert, "_frames_b64", lambda path, cfg: ["AAAA"])
+    cfg = load_config(None, [])
+    row = {"video": "v.mp4", "prompt": "Is it raining?\nAnswer with yes or no, then explain why.",
+           "generated": "Yes. Drops fall.", "reference": "Correct answer to this question: no."}
+    text = expert.build_messages(row, cfg)[1]["content"][-1]["text"]
+    assert "VERIFIED FACTS:\nCorrect answer to this question: no." in text
+    assert "REFERENCE ANSWER" not in text
+
+
+def test_yes_no_answer_sentence_gets_its_own_weight():
+    gen = "Yes. The man throws the ball before he jumps."
+    report = {"sentences": [
+        {"copied_content": "Yes.", "score": 1, "error_type": "temporal error", "rewritten_content": "No."},
+        {"copied_content": "The man throws the ball before he jumps.", "score": 2, "error_type": "temporal error",
+         "rewritten_content": "The man jumps before he throws the ball."}]}
+    w = build_weighted_responses(gen, report, HAL, IMG)
+    assert w["revised"] == "No. The man jumps before he throws the ball."
+    assert w["gen_spans"][0] == (0, 4, 2.5, 3.0) and w["rev_spans"][0] == (0, 3, 2.5, 3.0)
+
+
+def test_build_dataset_reference_only_has_no_gt(tmp_path, monkeypatch):
+    import json
+    import sys
+
+    from opadpo_video import build_dataset
+    from opadpo_video.data import read_jsonl
+
+    work = tmp_path / "work"
+    (work / "rollouts").mkdir(parents=True)
+    row = {"id": "t/1|basic", "video": "v.mp4", "prompt": "Q?", "reference": "Correct answer: no.",
+           "generated": "Yes. It rains.", "gen_finished": True}
+    (work / "rollouts" / "rank0.jsonl").write_text(json.dumps(row) + "\n", encoding="utf-8")
+    rep = {"sentences": [{"copied_content": "Yes.", "score": 1, "error_type": "visual recognition error",
+                          "rewritten_content": "No."},
+                         {"copied_content": "It rains.", "score": 1, "error_type": "visual recognition error",
+                          "rewritten_content": "It is dry."}]}
+    (work / "reports.jsonl").write_text(json.dumps({"id": "t/1|basic", "report": rep}) + "\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["x", "--config", "", f"work_dir={work.as_posix()}"])
+    build_dataset.main()
+    sft, dpo = read_jsonl(work / "sft.jsonl"), read_jsonl(work / "dpo.jsonl")
+    assert [r["id"] for r in sft] == ["t/1|basic#rev"] and sft[0]["response"] == "No. It is dry."
+    assert dpo[0]["gt"] is None and "reference" not in sft[0]

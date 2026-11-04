@@ -51,7 +51,7 @@ def setup(tmp_path_factory):
     from opadpo_video.config import load_config
 
     cfg = load_config(None, [f"model.base_model={(root / 'tiny').as_posix()}", "video.n_frames=4",
-                             "video.max_pixels=12544", "model.lora_rank=4", "model.lora_alpha=8",
+                             "video.frame_size=112", "model.lora_rank=4", "model.lora_alpha=8",
                              "model.gradient_checkpointing=false", f"work_dir={(root / 'work').as_posix()}",
                              "train.dataloader_num_workers=0", "train.max_response_tokens=64"])
     return cfg, str(video), root
@@ -83,6 +83,15 @@ def test_pipeline(setup):
     alone = response_logprobs(model, *collate_rows([r1], tok.pad_token_id))[0]
     padded = response_logprobs(model, *collate_rows([r1, Row(rows[1].prompt, [1, 2, 3])], tok.pad_token_id))[0]
     assert torch.allclose(alone, padded, atol=2e-2), (alone - padded).abs().max()
+
+    # Evaluation path: yes/no margin from last_logits equals the full forward's last position.
+    from opadpo_video.qwen import last_logits
+    b0, _ = collate_rows([rows[0]], tok.pad_token_id)
+    fast = last_logits(model, b0)[0]
+    b0["pixel_values_videos"] = b0["pixel_values_videos"].to(torch.bfloat16)
+    full = model(**b0, use_cache=False).logits[0, -1].float()
+    assert torch.allclose(fast, full, atol=1e-3)
+    assert v.shape[-2:] == (112, 112)
 
     # Build tiny SFT / DPO data from a fake expert report.
     gen = "A white bar moves left. The background is black."

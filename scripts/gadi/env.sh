@@ -1,25 +1,28 @@
-# Sourced by every PBS script. Edit PROJECT / paths once here.
-# Check module versions with `module avail python3 cuda` on Gadi.
-export PROJECT_CODE=${PROJECT_CODE:-hn98}                       # your NCI project code
-export ROOT=${ROOT:-/g/data/$PROJECT_CODE/$USER/OPA-DPO-Video}  # this repo
-export VENV=${VENV:-/g/data/$PROJECT_CODE/$USER/venvs/opadpo-video}
-export SCRATCH_DIR=/scratch/$PROJECT_CODE/$USER/opadpo-video
+# Sourced by every script. Same layout as Adaptive-SEED's run.md: everything under
+# /scratch/hn98/$USER, shared venv and HF cache, VideoHallucer read from project jp09.
+export PROJECT_CODE=${PROJECT_CODE:-hn98}
+export S=/scratch/$PROJECT_CODE/$USER
+export ROOT=${ROOT:-$S/OPA-DPO-Video}                  # this repo
+export VENV=${VENV:-$S/venv}                           # shared with Adaptive-SEED
+export HF_HOME=${HF_HOME:-$S/hf_cache}                 # shared with Adaptive-SEED (Qwen already downloaded)
+export OUT=${OUT:-$S/runs/opadpo}                      # all outputs of this project
+export DATA=$OUT/data                                  # prompts.jsonl, eval_vh.jsonl, split.json
+export WORK=$OUT/work                                  # rollouts, reports, sft/dpo jsonl, ref log-probs
+export VH_ROOT=${VH_ROOT:-/scratch/jp09/dd9648/datasets_video_hallu/videohallucer}
+export EH_ROOT=${EH_ROOT:-$S/runs/exp1/EventHallusion} # prepared by prep_eh in Adaptive-SEED's run.md
+export BASE_MODEL=Qwen/Qwen2.5-VL-7B-Instruct          # resolved from $HF_HOME (offline)
 
-module load python3/3.11.7 cuda/12.4.1 2>/dev/null || module load python3 cuda
-
+module load python3/3.11.7 cuda/12.3.2
 source "$VENV/bin/activate"
 cd "$ROOT"
 
-# Compute nodes have no internet: everything must already be downloaded.
-export HF_HOME=/g/data/$PROJECT_CODE/$USER/hf
-export HF_HUB_OFFLINE=1
-export TRANSFORMERS_OFFLINE=1
+export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1         # compute nodes have no internet
 export WANDB_MODE=offline
 export TMPDIR=${PBS_JOBFS:-/tmp}
-export OMP_NUM_THREADS=8
-export TOKENIZERS_PARALLELISM=false
-export PYTHONPATH="$ROOT:$PYTHONPATH"
+export OMP_NUM_THREADS=8 TOKENIZERS_PARALLELISM=false
+export PYTHONPATH="$ROOT:${PYTHONPATH:-}"
+export NGPUS=${PBS_NGPUS:-1}
+mkdir -p "$DATA" "$WORK" "$S/logs"
 
-# Local snapshot of the base model, downloaded by setup.sh.
-export BASE_MODEL=$HF_HOME/models/Qwen2.5-VL-7B-Instruct
-export NGPUS=${PBS_NGPUS:-$(nvidia-smi -L 2>/dev/null | wc -l)}
+# Arguments every stage shares.
+COMMON=(model.base_model="$BASE_MODEL" work_dir="$WORK")
