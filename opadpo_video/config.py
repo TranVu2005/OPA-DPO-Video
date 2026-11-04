@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import math
+import os
 import re
 import sys
 from dataclasses import dataclass, field
@@ -27,6 +29,9 @@ class ModelConfig:
     lora_alpha: int = 512
     lora_dropout: float = 0.0
     lora_vision: bool = True
+    # "paper": all LM linears (+ ViT/merger if lora_vision). "seed": Adaptive-SEED student targets
+    # (LM attention q/k/v/o + patch merger), for baselines compared against SEED.
+    lora_targets: str = "paper"
 
 
 @dataclass
@@ -203,3 +208,16 @@ def cli(description: str, extra: callable | None = None,
     args = parser.parse_args(rest)
     args.overrides = overrides
     return load_config(args.config, overrides), args
+
+
+def total_steps(n_examples: int, cfg: Config, world: int | None = None) -> int:
+    """Optimizer steps for num_train_epochs full passes, counting the short last step of each epoch.
+
+    HF Trainer derives max_steps from len(dataloader) // accumulation, so e.g. 130 examples with
+    accumulation 32 give 4 steps/epoch while each epoch really takes 5 (4 full + 1 of 2 examples):
+    4 "epochs" stopped after 3.25 passes. Passing max_steps explicitly fixes that.
+    """
+    t = cfg.train
+    world = world or int(os.environ.get("WORLD_SIZE", 1))
+    batches = math.ceil(math.ceil(n_examples / world) / t.per_device_train_batch_size)
+    return math.ceil(math.ceil(batches / t.gradient_accumulation_steps) * t.num_train_epochs)

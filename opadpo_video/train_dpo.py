@@ -63,7 +63,7 @@ def main():
     missing = [r["id"] for r in data.rows if r["id"] not in ref]
     if missing:
         raise SystemExit(f"{len(missing)} examples have no reference log-probs (e.g. {missing[:3]}); run precompute_ref")
-    trainer = OPADPOTrainer(model=model, args=training_args(cfg), train_dataset=data,
+    trainer = OPADPOTrainer(model=model, args=training_args(cfg, len(data)), train_dataset=data,
                             data_collator=DPOCollator(proc.tokenizer.pad_token_id), opa_cfg=cfg)
     trainer.train(resume_from_checkpoint=_last_checkpoint(cfg.train.output_dir))
     save_final(trainer, proc, cfg.train.output_dir)

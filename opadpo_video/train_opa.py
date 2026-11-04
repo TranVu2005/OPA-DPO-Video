@@ -12,12 +12,12 @@ from pathlib import Path
 import torch
 from transformers import Trainer, TrainingArguments
 
-from .config import Config, cli
+from .config import Config, cli, total_steps
 from .data import SFTCollator, SFTDataset
 from .qwen import load_model, load_processor
 
 
-def training_args(cfg: Config, **overrides) -> TrainingArguments:
+def training_args(cfg: Config, n_examples: int | None = None, **overrides) -> TrainingArguments:
     t = cfg.train
     kwargs = dict(
         output_dir=t.output_dir, num_train_epochs=t.num_train_epochs, learning_rate=t.learning_rate,
@@ -29,6 +29,8 @@ def training_args(cfg: Config, **overrides) -> TrainingArguments:
         remove_unused_columns=False, ddp_find_unused_parameters=False, deepspeed=t.deepspeed,
         weight_decay=0.0, max_grad_norm=1.0,
     )
+    if n_examples:
+        kwargs["max_steps"] = total_steps(n_examples, cfg)
     kwargs.update(overrides)
     return TrainingArguments(**kwargs)
 
@@ -46,7 +48,7 @@ def main():
     proc = load_processor(cfg)
     model = load_model(cfg, adapter=cfg.train.init_adapter, trainable=True)
     data = SFTDataset(args.data or cfg.work / "sft.jsonl", proc, cfg)
-    trainer = Trainer(model=model, args=training_args(cfg), train_dataset=data,
+    trainer = Trainer(model=model, args=training_args(cfg, len(data)), train_dataset=data,
                       data_collator=SFTCollator(proc.tokenizer.pad_token_id))
     trainer.train(resume_from_checkpoint=_last_checkpoint(cfg.train.output_dir))
     save_final(trainer, proc, cfg.train.output_dir)

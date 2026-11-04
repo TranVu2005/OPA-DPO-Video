@@ -5,12 +5,15 @@
 #   BINARY=1    expert-free yes/no baseline on $OUT/work_binary (from prepare.sh): reference = base,
 #               no token weights; keeps the image-focus term unless GAMMA_IF=0
 #   GAMMA_IF=x  image-focus weight for BINARY runs (default 0.2, as the paper)
+#   LR=x        BINARY learning rate (default 1e-5; pick on VH_VAL, e.g. 1e-5 vs 5e-5). BINARY runs use the
+#               Adaptive-SEED student budget: LoRA r16/a32/dropout 0.05 on LM attention + merger,
+#               cosine, warmup 5%, 1 epoch, batch 8. Output dir gets _lr<LR>.
 #
 #   qsub scripts/gadi/train_dpo.pbs                           -> $OUT/opadpo_pixel
 #   qsub -v MASK=shuffle scripts/gadi/train_dpo.pbs           -> $OUT/opadpo_shuffle
 #   qsub -v PLAIN=1 scripts/gadi/train_dpo.pbs                -> $OUT/dpo_plain
-#   qsub -v BINARY=1,GAMMA_IF=0 scripts/gadi/train_dpo.pbs    -> $OUT/binary_dpo           ("DPO yes/no")
-#   qsub -v BINARY=1,MASK=shuffle scripts/gadi/train_dpo.pbs  -> $OUT/binary_dpo_shuffle   ("DPO yes/no + m'")
+#   qsub -v BINARY=1,GAMMA_IF=0,LR=1e-5 scripts/gadi/train_dpo.pbs    -> $OUT/binary_dpo_lr1e-5          ("DPO yes/no")
+#   qsub -v BINARY=1,MASK=shuffle,LR=1e-5 scripts/gadi/train_dpo.pbs  -> $OUT/binary_dpo_shuffle_lr1e-5  ("DPO yes/no + m'")
 #PBS -N opadpo_dpo
 #PBS -P hn98
 #PBS -q gpuhopper
@@ -25,13 +28,16 @@
 set -euo pipefail
 source scripts/gadi/env.sh
 MASK=${MASK:-pixel}
+EPOCHS=4; GLOBAL_BATCH=32; HP=()
 if [ -n "${BINARY:-}" ]; then
   WORK="$OUT/work_binary"
   COMMON=(model.base_model="$BASE_MODEL" work_dir="$WORK")
   GAMMA_IF=${GAMMA_IF:-0.2}
-  if [ "$GAMMA_IF" = 0 ]; then NAME=binary_dpo; else NAME=binary_dpo_$MASK; fi
+  LR=${LR:-1e-5}; EPOCHS=1; GLOBAL_BATCH=8
+  if [ "$GAMMA_IF" = 0 ]; then NAME=binary_dpo_lr$LR; else NAME=binary_dpo_${MASK}_lr$LR; fi
   ADAPTER=none; INIT=null; REF=ref_logps_base_$MASK
   EXTRA=(dpo.use_weights=false dpo.gamma_if="$GAMMA_IF" dpo.gamma_anc=0)
+  HP=(model.lora_targets=seed model.lora_rank=16 model.lora_alpha=32 model.lora_dropout=0.05 train.warmup_ratio=0.05)
 elif [ -n "${PLAIN:-}" ]; then
   NAME=dpo_plain; ADAPTER=none; INIT=null; REF=ref_logps_base_$MASK
   EXTRA=(dpo.use_weights=false dpo.gamma_if=0 dpo.gamma_anc=0)
@@ -44,8 +50,8 @@ ARGS=("${COMMON[@]}" video.mask_method="$MASK" dpo.ref_dir="$REF")
 if [ ! -f "$WORK/$REF/meta.json" ]; then
   python -m opadpo_video.precompute_ref --adapter "$ADAPTER" "${ARGS[@]}"
 fi
-python -m opadpo_video.train_dpo "${ARGS[@]}" "${EXTRA[@]}" train.init_adapter="$INIT" \
-  train.output_dir="$OUT/$NAME" train.num_train_epochs=4 train.learning_rate=1e-6 \
-  train.per_device_train_batch_size=1 train.gradient_accumulation_steps=$((32 / NGPUS))
+python -m opadpo_video.train_dpo "${ARGS[@]}" "${EXTRA[@]}" "${HP[@]}" train.init_adapter="$INIT" \
+  train.output_dir="$OUT/$NAME" train.num_train_epochs=$EPOCHS train.learning_rate=${LR:-1e-6} \
+  train.per_device_train_batch_size=1 train.gradient_accumulation_steps=$((GLOBAL_BATCH / NGPUS))
 
 bash scripts/gadi/archive.sh || true

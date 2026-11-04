@@ -157,3 +157,26 @@ def test_override_numbers_follow_default_type():
     assert cfg.train.learning_rate == 2e-5 and isinstance(cfg.train.learning_rate, float)
     assert cfg.dpo.gamma_if == 0.0 and isinstance(cfg.dpo.gamma_if, float)
     assert cfg.train.gradient_accumulation_steps == 128
+
+
+def test_total_steps_counts_short_last_step():
+    from opadpo_video.config import load_config
+    from opadpo_video.config import total_steps
+
+    cfg = load_config("configs/default.yaml", ["train.gradient_accumulation_steps=32", "train.num_train_epochs=4"])
+    assert total_steps(130, cfg, world=1) == 20          # 5 steps/epoch (4 full + 1 of 2 examples)
+    cfg = load_config("configs/default.yaml", ["train.gradient_accumulation_steps=8", "train.num_train_epochs=1"])
+    assert total_steps(130, cfg, world=1) == 17
+    assert total_steps(128, cfg, world=1) == 16
+
+
+def test_seed_lora_targets():
+    import re
+
+    from opadpo_video.qwen import lora_target_regex
+
+    rx = re.compile(lora_target_regex(True, "seed"))
+    assert rx.fullmatch("base_model.model.model.layers.3.self_attn.q_proj")
+    assert rx.fullmatch("model.visual.merger.mlp.0")
+    assert not rx.fullmatch("model.layers.3.mlp.down_proj")
+    assert not rx.fullmatch("model.visual.blocks.0.attn.qkv")

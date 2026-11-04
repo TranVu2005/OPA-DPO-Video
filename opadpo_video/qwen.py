@@ -56,7 +56,14 @@ def load_model(cfg: Config, adapter: str | None = None, trainable: bool = False,
     return model
 
 
-def lora_target_regex(lora_vision: bool) -> str:
+SEED_LORA_TARGETS = r"(.*\.layers\.\d+\.self_attn\.(q|k|v|o)_proj)|(.*visual\.merger\.mlp\.(0|2))"
+
+
+def lora_target_regex(lora_vision: bool, targets: str = "paper") -> str:
+    if targets == "seed":
+        return SEED_LORA_TARGETS  # = Adaptive-SEED runtime.LORA_TARGETS
+    if targets != "paper":
+        raise ValueError(f"model.lora_targets must be paper or seed, got {targets!r}")
     # Language model linears; optionally the ViT blocks and the patch merger too.
     text = r".*model\.(language_model\.)?layers\.\d+\.(self_attn\.(q|k|v|o)_proj|mlp\.(gate|up|down)_proj)"
     if not lora_vision:
@@ -72,7 +79,7 @@ def add_lora(model, cfg: Config):
         r=cfg.model.lora_rank,
         lora_alpha=cfg.model.lora_alpha,
         lora_dropout=cfg.model.lora_dropout,
-        target_modules=lora_target_regex(cfg.model.lora_vision),
+        target_modules=lora_target_regex(cfg.model.lora_vision, cfg.model.lora_targets),
         task_type="CAUSAL_LM",
     )
     model = get_peft_model(model, lcfg)

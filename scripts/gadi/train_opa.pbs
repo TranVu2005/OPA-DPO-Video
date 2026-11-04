@@ -1,5 +1,7 @@
 #!/bin/bash
-# Step 3: OPA (LoRA-SFT on GT + revised). Global batch 128 (BINARY: 16) = NGPUS x 1 x accumulation.
+# Step 3: OPA (LoRA-SFT on GT + revised). Global batch 128 = NGPUS x 1 x accumulation.
+# BINARY=1 uses the Adaptive-SEED student budget instead (src/seed_video/config.py, FAST=True):
+#   LoRA r16/a32/dropout 0.05 on LM attention + merger, lr 1e-4 cosine, warmup 5%, 1 epoch, batch 8.
 #   qsub scripts/gadi/train_opa.pbs                -> $OUT/opa
 #   qsub -v BINARY=1 scripts/gadi/train_opa.pbs    -> $OUT/binary_sft  (SFT on yes/no labels, no expert)
 #PBS -N opadpo_opa
@@ -15,15 +17,13 @@
 #PBS -j oe
 set -euo pipefail
 source scripts/gadi/env.sh
-NAME=opa
-GLOBAL_BATCH=128
+NAME=opa; EPOCHS=2; LR=2e-5; GLOBAL_BATCH=128; HP=()
 if [ -n "${BINARY:-}" ]; then
   COMMON=(model.base_model="$BASE_MODEL" work_dir="$OUT/work_binary")
-  NAME=binary_sft
-  GLOBAL_BATCH=16   # 130 yes/no examples: batch 128 gave 2 steps (1st at warmup lr 0); 16 -> ~16 steps, ~ binary DPO
+  NAME=binary_sft; EPOCHS=1; LR=1e-4; GLOBAL_BATCH=8
+  HP=(model.lora_targets=seed model.lora_rank=16 model.lora_alpha=32 model.lora_dropout=0.05 train.warmup_ratio=0.05)
 fi
-python -m opadpo_video.train_opa "${COMMON[@]}" train.output_dir="$OUT/$NAME" \
-  train.num_train_epochs=2 train.learning_rate=2e-5 \
+python -m opadpo_video.train_opa "${COMMON[@]}" "${HP[@]}" train.output_dir="$OUT/$NAME" \
+  train.num_train_epochs=$EPOCHS train.learning_rate=$LR \
   train.per_device_train_batch_size=1 train.gradient_accumulation_steps=$((GLOBAL_BATCH / NGPUS))
-
 bash scripts/gadi/archive.sh || true
