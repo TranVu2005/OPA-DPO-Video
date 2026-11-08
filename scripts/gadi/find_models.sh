@@ -16,7 +16,7 @@ for name in "${NAMES[@]}"; do
   repo=${name#models--}; repo=${repo/--//}
   echo "== $repo"
   dirs=$(for root in "${ROOTS[@]}"; do
-           [ -d "$root" ] && find "$root" -maxdepth 6 -type d -name "$name" 2>/dev/null
+           [ -d "$root" ] && find "$root" -maxdepth 6 -type d -name "$name" -not -path "*/.locks/*" 2>/dev/null
          done | xargs -r -n1 realpath 2>/dev/null | sort -u)
   if [ -z "$dirs" ]; then
     echo "  not found: download on a login node, e.g." \
