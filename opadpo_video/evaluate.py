@@ -27,7 +27,7 @@ import torch
 
 from .config import cli
 from .data import read_jsonl
-from .qwen import Row, collate_rows, encode_prompt, last_logits, load_model, load_processor, prepare_video
+from .qwen import Row, answer_ids, collate_rows, encode_prompt, last_logits, load_model, load_processor, prepare_video
 from .prepare_videohallucer import YN_SUFFIX
 
 EH_SUBDIRS = {"entire": ["entire"], "mix": ["interleave", "mix"], "misleading": ["misleading"]}
@@ -123,7 +123,7 @@ def main():
     if todo:
         proc = load_processor(cfg)
         tok = proc.tokenizer
-        yes, no = tok.encode("Yes", add_special_tokens=False)[0], tok.encode("No", add_special_tokens=False)[0]
+        yes, no = answer_ids(proc)  # "Yes"/"No"; "yes"/"no" for Qwen3-VL (as Adaptive-SEED)
         model = load_model(cfg, adapter=args.adapter, device_map={"": 0} if torch.cuda.is_available() else None)
         with open(marg_path, "a", encoding="utf-8") as f, torch.no_grad():
             for n, it in enumerate(todo, 1):

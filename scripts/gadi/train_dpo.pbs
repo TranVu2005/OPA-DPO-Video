@@ -8,6 +8,8 @@
 #   LR=x        BINARY learning rate (default 1e-5; pick on VH_VAL, e.g. 1e-5 vs 5e-5). BINARY runs use the
 #               Adaptive-SEED student budget: LoRA r16/a32/dropout 0.05 on LM attention + merger,
 #               cosine, warmup 5%, 1 epoch, batch 8. Output dir gets _lr<LR>.
+#   MODEL=qwen25|qwen3|internvl  backbone (BINARY only for qwen3 / internvl). Output and reference dirs
+#               get _qwen3 / _internvl, e.g. binary_dpo_lr1e-4_qwen3, work_binary/ref_logps_qwen3_base_pixel.
 #
 #   qsub scripts/gadi/train_dpo.pbs                           -> $OUT/opadpo_pixel
 #   qsub -v MASK=shuffle scripts/gadi/train_dpo.pbs           -> $OUT/opadpo_shuffle
@@ -34,10 +36,14 @@ if [ -n "${BINARY:-}" ]; then
   COMMON=(model.base_model="$BASE_MODEL" work_dir="$WORK")
   GAMMA_IF=${GAMMA_IF:-0.2}
   LR=${LR:-1e-5}; EPOCHS=1; GLOBAL_BATCH=8
-  if [ "$GAMMA_IF" = 0 ]; then NAME=binary_dpo_lr$LR; else NAME=binary_dpo_${MASK}_lr$LR; fi
-  ADAPTER=none; INIT=null; REF=ref_logps_base_$MASK
+  if [ "$GAMMA_IF" = 0 ]; then NAME=binary_dpo_lr$LR$MODEL_TAG; else NAME=binary_dpo_${MASK}_lr$LR$MODEL_TAG; fi
+  ADAPTER=none; INIT=null; REF=ref_logps${MODEL_TAG}_base_$MASK
   EXTRA=(dpo.use_weights=false dpo.gamma_if="$GAMMA_IF" dpo.gamma_anc=0)
   HP=(model.lora_targets=seed model.lora_rank=16 model.lora_alpha=32 model.lora_dropout=0.05 train.warmup_ratio=0.05)
+  # InternVL's remote code is trained without checkpointing, as SEED (FAST: grad_ckpt=False); fits one H200.
+  if [ "$MODEL" = internvl ]; then HP+=(model.gradient_checkpointing=false); fi
+elif [ "$MODEL" != qwen25 ]; then
+  echo "MODEL=$MODEL supports only the yes/no baselines (BINARY=1); OPA-DPO needs the Qwen2.5 rollouts" >&2; exit 1
 elif [ -n "${PLAIN:-}" ]; then
   NAME=dpo_plain; ADAPTER=none; INIT=null; REF=ref_logps_base_$MASK
   EXTRA=(dpo.use_weights=false dpo.gamma_if=0 dpo.gamma_anc=0)

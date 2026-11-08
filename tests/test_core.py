@@ -180,3 +180,62 @@ def test_seed_lora_targets():
     assert rx.fullmatch("model.visual.merger.mlp.0")
     assert not rx.fullmatch("model.layers.3.mlp.down_proj")
     assert not rx.fullmatch("model.visual.blocks.0.attn.qkv")
+
+
+def test_model_family_and_answer_spelling():
+    import pytest
+
+    from opadpo_video.qwen import model_family, render_answer
+
+    assert model_family("Qwen/Qwen2.5-VL-7B-Instruct") == "qwen2_5"
+    assert model_family("Qwen/Qwen3-VL-8B-Instruct") == "qwen3"
+    assert model_family("OpenGVLab/InternVL3_5-8B-Instruct") == "internvl"
+    with pytest.raises(ValueError):
+        model_family("llava-hf/llava-1.5-7b-hf")
+
+    class P:  # a processor tagged by load_processor
+        def __init__(self, fam):
+            self.opadpo_family = fam
+
+    assert render_answer(P("qwen3"), "Yes.") == "yes." and render_answer(P("qwen3"), "No.") == "no."
+    assert render_answer(P("qwen2_5"), "Yes.") == "Yes." and render_answer(P("internvl"), "No.") == "No."
+    assert render_answer(P("qwen3"), "Yes. The man waves.") == "Yes. The man waves."  # long text untouched
+
+
+def test_seed_lora_targets_per_backbone():
+    import re
+
+    from opadpo_video.qwen import lora_target_regex
+
+    q3 = re.compile(lora_target_regex(True, "seed", "qwen3"))
+    assert q3.fullmatch("base_model.model.model.language_model.layers.0.self_attn.k_proj")
+    assert q3.fullmatch("model.visual.merger.linear_fc1") and q3.fullmatch("model.visual.merger.linear_fc2")
+    assert not q3.fullmatch("model.visual.deepstack_merger_list.0.linear_fc1")
+    assert not q3.fullmatch("model.visual.blocks.0.attn.qkv")
+    iv = re.compile(lora_target_regex(True, "seed", "internvl"))
+    assert iv.fullmatch("base_model.model.language_model.model.layers.5.self_attn.o_proj")
+    assert iv.fullmatch("base_model.model.mlp1.1") and iv.fullmatch("base_model.model.mlp1.3")
+    assert not iv.fullmatch("base_model.model.mlp1.0")  # LayerNorm
+    assert not iv.fullmatch("base_model.model.vision_model.encoder.layers.0.attn.qkv")
+
+
+def test_collate_rows_internvl_and_qwen3_inputs():
+    import torch
+
+    from opadpo_video.qwen import Row, collate_rows, to_device
+
+    def iv(n_tok, frames):
+        return {"input_ids": torch.arange(n_tok)[None], "attention_mask": torch.ones(1, n_tok, dtype=torch.long),
+                "pixel_values": torch.zeros(frames, 3, 448, 448), "image_flags": torch.ones(frames, 1, dtype=torch.long)}
+
+    batch, lens = collate_rows([Row(iv(5, 8), [1, 2]), Row(iv(7, 8), [3])], pad_id=0)
+    assert batch["input_ids"].shape == (2, 8) and lens == [2, 1]  # 5+2 and 7+1 tokens, left-padded
+    assert batch["pixel_values"].shape == (16, 3, 448, 448) and batch["image_flags"].shape == (16, 1)
+    assert to_device(batch, "cpu")["pixel_values"].dtype == torch.bfloat16
+
+    def q3(n_tok):
+        return {"input_ids": torch.arange(n_tok)[None], "attention_mask": torch.ones(1, n_tok, dtype=torch.long),
+                "pixel_values_videos": torch.zeros(4 * 196, 1536), "video_grid_thw": torch.tensor([[4, 28, 28]])}
+
+    batch, _ = collate_rows([Row(q3(10), []), Row(q3(12), [])], pad_id=0)
+    assert batch["video_grid_thw"].shape == (2, 3) and "second_per_grid_ts" not in batch

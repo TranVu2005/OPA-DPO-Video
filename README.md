@@ -116,6 +116,17 @@ Mọi hàng dùng cùng Qwen2.5-VL-7B, cùng split VideoHallucer (`temporal` + `
 
 **Kiểm tra trước khi tin kết quả:** dòng `base` của repo này phải khớp dòng `base` trong `results.csv` của Adaptive-SEED (cùng `VH_TEST`, cùng `EH_ALL`). Nếu lệch, nghĩa là tiền xử lý hoặc prompt chưa giống, phải sửa trước khi so sánh.
 
+### Backbone khác: Qwen3-VL-8B và InternVL3.5-8B
+
+Baseline yes/no (SFT, DPO, DPO + m′) và đánh giá chạy được trên cùng hai checkpoint mà Adaptive-SEED dùng: `Qwen/Qwen3-VL-8B-Instruct` và `OpenGVLab/InternVL3_5-8B-Instruct`. Chọn bằng `MODEL=qwen3|internvl` (mặc định `qwen25`). Rollout, expert và OPA-DPO đầy đủ vẫn chỉ có cho Qwen2.5-VL.
+
+- **Đầu vào giống SEED** (`models/qwen.py`, `models/internvl.py`): Qwen3-VL nhận video kèm `video_metadata` và `do_sample_frames=False`. InternVL nhận mỗi frame là một ảnh 448², prompt `Frame{i}: <image>`, chuẩn hoá ImageNet, không chia tile.
+- **Token trả lời:** Qwen3-VL trả lời chữ thường, nên margin là `logit("yes") − logit("no")` và nhãn train "Yes."/"No." được đổi thành "yes."/"no.". Qwen2.5 và InternVL giữ "Yes"/"No". Job dừng ngay nếu token đầu của nhãn train khác token được chấm.
+- **LoRA** dùng đúng `LORA_TARGETS` của SEED cho từng model: attention q/k/v/o của LM, cộng `visual.merger` (Qwen3) hoặc `mlp1.1/3` (InternVL).
+- **Env riêng:** cần transformers 4.57, build một lần thành `opadpo-video-tf457` (`env_requirements_tf457.txt`). `env.sh` tự chọn tarball này khi `MODEL` khác `qwen25`.
+- **Tên output** thêm hậu tố `_qwen3` hoặc `_internvl`: `binary_sft_qwen3`, `binary_dpo_lr1e-4_qwen3`, `work_binary/ref_logps_qwen3_base_pixel`, `eval/base_qwen3`. Dữ liệu `work_binary` và `eval_vh.jsonl` dùng chung cho mọi model.
+- **Vị trí model:** `env.sh` tự tìm HF cache có model, trong `$S/hf_cache`, `/g/data/hn98/$USER/models/hf_cache_*` và `/scratch/jp09/$USER/hf_cache_*`. `bash scripts/gadi/find_models.sh` liệt kê mọi bản đang có. Nếu model nằm chỗ khác, truyền `HF_HOME=<thư mục chứa hub/>`.
+
 ## Chạy trên Gadi (1 H200, giống `run.md` của Adaptive-SEED)
 
 Đường dẫn (sửa trong [scripts/gadi/env.sh](scripts/gadi/env.sh) nếu khác):

@@ -4,6 +4,8 @@
 #   LoRA r16/a32/dropout 0.05 on LM attention + merger, lr 1e-4 cosine, warmup 5%, 1 epoch, batch 8.
 #   qsub scripts/gadi/train_opa.pbs                -> $OUT/opa
 #   qsub -v BINARY=1 scripts/gadi/train_opa.pbs    -> $OUT/binary_sft  (SFT on yes/no labels, no expert)
+#   qsub -v BINARY=1,MODEL=qwen3 scripts/gadi/train_opa.pbs     -> $OUT/binary_sft_qwen3
+#   qsub -v BINARY=1,MODEL=internvl scripts/gadi/train_opa.pbs  -> $OUT/binary_sft_internvl
 #PBS -N opadpo_opa
 #PBS -P hn98
 #PBS -q gpuhopper
@@ -20,8 +22,12 @@ source scripts/gadi/env.sh
 NAME=opa; EPOCHS=2; LR=2e-5; GLOBAL_BATCH=128; HP=()
 if [ -n "${BINARY:-}" ]; then
   COMMON=(model.base_model="$BASE_MODEL" work_dir="$OUT/work_binary")
-  NAME=binary_sft; EPOCHS=1; LR=1e-4; GLOBAL_BATCH=8
+  NAME=binary_sft$MODEL_TAG; EPOCHS=1; LR=1e-4; GLOBAL_BATCH=8
   HP=(model.lora_targets=seed model.lora_rank=16 model.lora_alpha=32 model.lora_dropout=0.05 train.warmup_ratio=0.05)
+  # InternVL's remote code is trained without checkpointing, as SEED (FAST: grad_ckpt=False); fits one H200.
+  if [ "$MODEL" = internvl ]; then HP+=(model.gradient_checkpointing=false); fi
+elif [ "$MODEL" != qwen25 ]; then
+  echo "MODEL=$MODEL supports only the yes/no baselines (BINARY=1); OPA needs the Qwen2.5 rollouts" >&2; exit 1
 fi
 python -m opadpo_video.train_opa "${COMMON[@]}" "${HP[@]}" train.output_dir="$OUT/$NAME" \
   train.num_train_epochs=$EPOCHS train.learning_rate=$LR \

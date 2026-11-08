@@ -16,7 +16,7 @@ import torch
 from torch.utils.data import Dataset
 
 from .config import Config
-from .qwen import Row, collate_rows, encode_prompt, encode_response, prepare_video
+from .qwen import Row, check_answer_tokens, collate_rows, encode_prompt, encode_response, prepare_video, render_answer
 from .weights import span_weights_to_tokens
 
 # DPO roles: response x video. "_m" = original video m, "_mm" = distorted video m'.
@@ -46,6 +46,8 @@ def _eos_fill(weights: list[float], ids: list[int], eos_id: int) -> list[float]:
 class SFTDataset(Dataset):
     def __init__(self, path: str | Path, processor, cfg: Config):
         self.rows, self.proc, self.cfg = read_jsonl(path), processor, cfg
+        if any(r["response"] in ("Yes.", "No.") for r in self.rows):
+            check_answer_tokens(processor)  # yes/no labels: must train the token the evaluation reads
 
     def __len__(self):
         return len(self.rows)
@@ -53,7 +55,8 @@ class SFTDataset(Dataset):
     def __getitem__(self, i):
         r = self.rows[i]
         video, fps = prepare_video(r["video"], self.cfg)
-        ids, _ = encode_response(self.proc.tokenizer, r["response"], max_tokens=self.cfg.train.max_response_tokens)
+        ids, _ = encode_response(self.proc.tokenizer, render_answer(self.proc, r["response"]),
+                                 max_tokens=self.cfg.train.max_response_tokens)
         return Row(encode_prompt(self.proc, r["prompt"], video, fps), ids)
 
 
@@ -79,13 +82,17 @@ class DPODataset(Dataset):
     def __init__(self, path: str | Path, processor, cfg: Config, ref_logps: dict | None = None):
         self.rows, self.proc, self.cfg, self.ref = read_jsonl(path), processor, cfg, ref_logps
         self.eos_id = processor.tokenizer.convert_tokens_to_ids("<|im_end|>")
+        if any(r["rev"] in ("Yes.", "No.") for r in self.rows):
+            check_answer_tokens(processor)
 
     def __len__(self):
         return len(self.rows)
 
     def _response(self, text: str, spans=None, add_eos=True):
+        # render_answer only changes the case of "Yes."/"No.", so the character spans still hold.
         ids, offsets = encode_response(
-            self.proc.tokenizer, text, add_eos=add_eos, max_tokens=self.cfg.train.max_response_tokens
+            self.proc.tokenizer, render_answer(self.proc, text), add_eos=add_eos,
+            max_tokens=self.cfg.train.max_response_tokens
         )
         if spans is None:
             return ids, None, None

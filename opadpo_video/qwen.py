@@ -1,4 +1,12 @@
-"""Qwen2.5-VL glue: model/LoRA loading, input building and response log-probs.
+"""Model glue: model/LoRA loading, input building and response log-probs.
+
+Three backends, chosen from model.base_model (see model_family):
+  qwen2_5   Qwen/Qwen2.5-VL-7B-Instruct       (default; the OPA-DPO pipeline was written for it)
+  qwen3     Qwen/Qwen3-VL-8B-Instruct         (transformers >= 4.57)
+  internvl  OpenGVLab/InternVL3_5-8B-Instruct (trust_remote_code; frames as separate 448px images)
+Inputs follow Adaptive-SEED's models/qwen.py and models/internvl.py, so the yes/no protocol is the
+same as SEED's for every backend. Only the expert-free yes/no path (build_binary -> SFT / DPO ->
+evaluate) is supported on qwen3 / internvl; rollout and the expert stay Qwen2.5-only.
 
 A "row" is one (video, prompt, response) triple. Rows are encoded one by one
 (prompt through the processor, response through the tokenizer, so token offsets map
@@ -8,6 +16,8 @@ every response at the end of its row, so only the last R+1 logits are needed.
 from __future__ import annotations
 
 import inspect
+import json
+import os
 from contextlib import contextmanager
 from dataclasses import dataclass
 
@@ -19,28 +29,135 @@ from .config import Config
 from .video import load_video, mask_video, sample_seed
 
 IM_END = "<|im_end|>"
+FAMILIES = ("qwen2_5", "qwen3", "internvl")
+# Token each model actually emits after "Answer with yes or no." (Adaptive-SEED models/qwen.py:
+# Qwen3-VL answers lowercase, ~99% of the mass on 'yes'/'no').
+ANSWER_WORDS = {"qwen2_5": ("Yes", "No"), "qwen3": ("yes", "no"), "internvl": ("Yes", "No")}
+INTERNVL_FRAME_SIZE = 448  # one 448px tile per frame (no dynamic tiling), as Adaptive-SEED
+IMAGENET_MEAN, IMAGENET_STD = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
+
+
+def model_family(name_or_path: str) -> str:
+    """qwen2_5 | qwen3 | internvl, from the hub id or, for a local path, its config.json."""
+    name = name_or_path
+    cfg_file = os.path.join(name_or_path, "config.json")
+    if os.path.isfile(cfg_file):
+        with open(cfg_file, encoding="utf-8") as f:
+            name = json.load(f).get("model_type", "") + " " + name_or_path
+    n = name.lower().replace("_", "-")
+    if "internvl" in n:
+        return "internvl"
+    if "qwen3-vl" in n:
+        return "qwen3"
+    if "qwen2.5-vl" in n or "qwen2-5-vl" in n:
+        return "qwen2_5"
+    raise ValueError(f"unsupported model {name_or_path!r}: expected Qwen2.5-VL, Qwen3-VL or InternVL3.5")
+
+
+def family_of(processor) -> str:
+    """Backend of a processor returned by load_processor."""
+    return getattr(processor, "opadpo_family", "qwen2_5")
+
+
+def answer_ids(processor) -> tuple[int, int]:
+    """Token ids whose logit difference is the yes/no margin."""
+    tok = processor.tokenizer
+    yes, no = ANSWER_WORDS[family_of(processor)]
+    return tok.encode(yes, add_special_tokens=False)[0], tok.encode(no, add_special_tokens=False)[0]
+
+
+def render_answer(processor, text: str) -> str:
+    """Yes/no targets ("Yes." / "No.", from build_binary) in the spelling the model itself uses, so
+    SFT / DPO move the token the evaluation reads. Any other text is returned unchanged."""
+    if text.strip() in ("Yes.", "No.") and ANSWER_WORDS[family_of(processor)][0].islower():
+        return text.lower()
+    return text
+
+
+def check_answer_tokens(processor) -> None:
+    """Fail early if a rendered yes/no target does not start with the token the evaluation scores."""
+    yes, no = answer_ids(processor)
+    tok = processor.tokenizer
+    for label, want in (("Yes.", yes), ("No.", no)):
+        got = tok.encode(render_answer(processor, label), add_special_tokens=False)[0]
+        if got != want:
+            raise RuntimeError(f"{family_of(processor)}: {label!r} starts with token {got}, evaluation reads {want}")
+    eos = tok.convert_tokens_to_ids(IM_END)
+    if eos is None or eos == tok.unk_token_id:
+        raise RuntimeError(f"{family_of(processor)}: tokenizer has no {IM_END}")
+
+
+class InternVLProcessor:
+    """Tokenizer + chat template + frame layout of InternVL3.5 (Adaptive-SEED models/internvl.py)."""
+
+    opadpo_family = "internvl"
+
+    def __init__(self, name_or_path: str):
+        from transformers import AutoConfig, AutoTokenizer
+        from transformers.dynamic_module_utils import get_class_from_dynamic_module
+
+        self.tokenizer = AutoTokenizer.from_pretrained(name_or_path, trust_remote_code=True, use_fast=False)
+        self.tokenizer.padding_side = "left"
+        config = AutoConfig.from_pretrained(name_or_path, trust_remote_code=True)
+        vision = config.vision_config
+        self.num_image_token = int((vision.image_size // vision.patch_size) ** 2 * config.downsample_ratio ** 2)
+        self.template = config.template
+        self._get_conv_template = get_class_from_dynamic_module("conversation.get_conv_template", name_or_path)
+
+    def prompt(self, question: str, n_frames: int) -> str:
+        # The template's system_message is what InternVLChatModel uses (model.system_message).
+        conv = self._get_conv_template(self.template)
+        frames = "".join(f"Frame{i + 1}: <image>\n" for i in range(n_frames))
+        conv.append_message(conv.roles[0], frames + question)
+        conv.append_message(conv.roles[1], None)
+        text = conv.get_prompt()
+        image = "<img>" + "<IMG_CONTEXT>" * self.num_image_token + "</img>"
+        for _ in range(n_frames):
+            text = text.replace("<image>", image, 1)
+        return text
+
+    def save_pretrained(self, path: str) -> None:
+        self.tokenizer.save_pretrained(path)
 
 
 # ----------------------------------------------------------------------------- loading
 def load_processor(cfg: Config):
+    family = model_family(cfg.model.base_model)
+    if family == "internvl":
+        return InternVLProcessor(cfg.model.base_model)
     from transformers import AutoProcessor
 
     proc = AutoProcessor.from_pretrained(cfg.model.base_model)
     proc.tokenizer.padding_side = "left"
+    proc.opadpo_family = family
     return proc
 
 
-def load_model(cfg: Config, adapter: str | None = None, trainable: bool = False, device_map=None):
-    from transformers import Qwen2_5_VLForConditionalGeneration
+def _dtype_kwargs(fn) -> dict:
+    return {("dtype" if "dtype" in inspect.signature(fn).parameters else "torch_dtype"): torch.bfloat16}
 
-    kwargs = dict(attn_implementation=cfg.model.attn_implementation)
-    if "dtype" in inspect.signature(Qwen2_5_VLForConditionalGeneration.from_pretrained).parameters:
-        kwargs["dtype"] = torch.bfloat16
+
+def _load_base(cfg: Config, device_map=None):
+    family = model_family(cfg.model.base_model)
+    kwargs = {} if device_map is None else {"device_map": device_map}
+    if family == "internvl":
+        from transformers import AutoModel, AutoTokenizer
+
+        model = AutoModel.from_pretrained(cfg.model.base_model, torch_dtype=torch.bfloat16, low_cpu_mem_usage=True,
+                                          use_flash_attn=False, trust_remote_code=True, **kwargs)
+        tok = AutoTokenizer.from_pretrained(cfg.model.base_model, trust_remote_code=True, use_fast=False)
+        model.img_context_token_id = tok.convert_tokens_to_ids("<IMG_CONTEXT>")  # forward() reads it
+        return model
+    if family == "qwen3":
+        from transformers import Qwen3VLForConditionalGeneration as cls
     else:
-        kwargs["torch_dtype"] = torch.bfloat16
-    if device_map is not None:
-        kwargs["device_map"] = device_map
-    model = Qwen2_5_VLForConditionalGeneration.from_pretrained(cfg.model.base_model, **kwargs)
+        from transformers import Qwen2_5_VLForConditionalGeneration as cls
+    return cls.from_pretrained(cfg.model.base_model, attn_implementation=cfg.model.attn_implementation,
+                               **_dtype_kwargs(cls.from_pretrained), **kwargs)
+
+
+def load_model(cfg: Config, adapter: str | None = None, trainable: bool = False, device_map=None):
+    model = _load_base(cfg, device_map)
     model.config.use_cache = False
     if adapter:
         from peft import PeftModel
@@ -49,21 +166,31 @@ def load_model(cfg: Config, adapter: str | None = None, trainable: bool = False,
     elif trainable:
         model = add_lora(model, cfg)
     if trainable and cfg.model.gradient_checkpointing:
-        model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
-        model.enable_input_require_grads()
+        try:
+            model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+            model.enable_input_require_grads()
+        except (AttributeError, NotImplementedError, ValueError) as e:  # remote-code models may lack it
+            print(f"gradient checkpointing not enabled: {e}")
     if not trainable:
         model.eval().requires_grad_(False)
     return model
 
 
-SEED_LORA_TARGETS = r"(.*\.layers\.\d+\.self_attn\.(q|k|v|o)_proj)|(.*visual\.merger\.mlp\.(0|2))"
+# Adaptive-SEED runtime.LORA_TARGETS (training/losses.py): LM attention q/k/v/o + vision-to-LM projector.
+SEED_LORA_TARGETS = {
+    "qwen2_5": r"(.*\.layers\.\d+\.self_attn\.(q|k|v|o)_proj)|(.*visual\.merger\.mlp\.(0|2))",
+    "qwen3": r"(.*\.layers\.\d+\.self_attn\.(q|k|v|o)_proj)|(.*visual\.merger\.(mlp\.(0|2)|linear_fc[12]))",
+    "internvl": r"(.*language_model\.model\.layers\.\d+\.self_attn\.(q|k|v|o)_proj)|(.*mlp1\.(1|3))",
+}
 
 
-def lora_target_regex(lora_vision: bool, targets: str = "paper") -> str:
+def lora_target_regex(lora_vision: bool, targets: str = "paper", family: str = "qwen2_5") -> str:
     if targets == "seed":
-        return SEED_LORA_TARGETS  # = Adaptive-SEED runtime.LORA_TARGETS
+        return SEED_LORA_TARGETS[family]
     if targets != "paper":
         raise ValueError(f"model.lora_targets must be paper or seed, got {targets!r}")
+    if family != "qwen2_5":
+        raise ValueError(f"lora_targets=paper is defined for Qwen2.5-VL only; use model.lora_targets=seed for {family}")
     # Language model linears; optionally the ViT blocks and the patch merger too.
     text = r".*model\.(language_model\.)?layers\.\d+\.(self_attn\.(q|k|v|o)_proj|mlp\.(gate|up|down)_proj)"
     if not lora_vision:
@@ -75,12 +202,15 @@ def lora_target_regex(lora_vision: bool, targets: str = "paper") -> str:
 def add_lora(model, cfg: Config):
     from peft import LoraConfig, get_peft_model
 
+    family = model_family(cfg.model.base_model)
     lcfg = LoraConfig(
         r=cfg.model.lora_rank,
         lora_alpha=cfg.model.lora_alpha,
         lora_dropout=cfg.model.lora_dropout,
-        target_modules=lora_target_regex(cfg.model.lora_vision, cfg.model.lora_targets),
-        task_type="CAUSAL_LM",
+        target_modules=lora_target_regex(cfg.model.lora_vision, cfg.model.lora_targets, family),
+        # PeftModelForCausalLM passes inputs_embeds=None, which InternVLChatModel.forward rejects;
+        # a plain PeftModel forwards kwargs untouched (as Adaptive-SEED wraps it).
+        task_type=None if family == "internvl" else "CAUSAL_LM",
     )
     model = get_peft_model(model, lcfg)
     model.print_trainable_parameters()
@@ -124,8 +254,28 @@ def chat_prompt(processor, prompt: str) -> str:
     return processor.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True)
 
 
+def _internvl_pixels(video: torch.Tensor) -> torch.Tensor:
+    """uint8 (T, C, H, W) -> ImageNet-normalised float (T, 3, 448, 448), as SEED's transform."""
+    if tuple(video.shape[-2:]) != (INTERNVL_FRAME_SIZE, INTERNVL_FRAME_SIZE):
+        video = _resize_square_pil(video, INTERNVL_FRAME_SIZE)
+    x = video.float() / 255.0
+    return (x - torch.tensor(IMAGENET_MEAN).view(1, 3, 1, 1)) / torch.tensor(IMAGENET_STD).view(1, 3, 1, 1)
+
+
 def encode_prompt(processor, prompt: str, video: torch.Tensor, fps: float) -> dict:
+    family = family_of(processor)
+    if family == "internvl":
+        enc = processor.tokenizer(processor.prompt(prompt.strip(), video.shape[0]), return_tensors="pt")
+        return {"input_ids": enc["input_ids"], "attention_mask": enc["attention_mask"],
+                "pixel_values": _internvl_pixels(video),
+                "image_flags": torch.ones((video.shape[0], 1), dtype=torch.long)}
     text = chat_prompt(processor, prompt)
+    if family == "qwen3":
+        # Frames are already sampled; Qwen3-VL writes per-frame timestamps from this metadata (as SEED).
+        n = int(video.shape[0])
+        meta = {"total_num_frames": n, "fps": float(fps), "duration": n / float(fps), "frames_indices": list(range(n))}
+        return dict(processor(text=[text], videos=[video], video_metadata=[meta], do_sample_frames=False,
+                              return_tensors="pt"))
     try:
         enc = processor(text=[text], videos=[video], fps=[fps], return_tensors="pt")
     except TypeError:
@@ -152,8 +302,15 @@ class Row:
     response_ids: list[int]
 
 
+PIXEL_KEYS = ("pixel_values_videos", "pixel_values")
+
+
 def collate_rows(rows: list[Row], pad_id: int) -> tuple[dict, list[int]]:
-    """Left-pad rows into one batch. Returns model inputs and per-row response lengths."""
+    """Left-pad rows into one batch. Returns model inputs and per-row response lengths.
+
+    Vision inputs are concatenated in row order (pixel_values_videos / video_grid_thw for Qwen,
+    pixel_values / image_flags for InternVL): every backend fills its visual placeholder tokens
+    in that order, which left padding keeps."""
     seqs = [torch.cat([r.prompt["input_ids"][0], torch.tensor(r.response_ids, dtype=torch.long)]) for r in rows]
     width = max(len(s) for s in seqs)
     input_ids = torch.full((len(rows), width), pad_id, dtype=torch.long)
@@ -161,24 +318,30 @@ def collate_rows(rows: list[Row], pad_id: int) -> tuple[dict, list[int]]:
     for i, s in enumerate(seqs):
         input_ids[i, width - len(s):] = s
         attention_mask[i, width - len(s):] = 1
-    batch = {
-        "input_ids": input_ids,
-        "attention_mask": attention_mask,
-        "pixel_values_videos": torch.cat([r.prompt["pixel_values_videos"] for r in rows]),
-        "video_grid_thw": torch.cat([r.prompt["video_grid_thw"] for r in rows]),
-    }
-    if all("second_per_grid_ts" in r.prompt for r in rows):
-        # Python floats, as the HF processor returns them: get_rope_index multiplies them with a
-        # CPU arange, so a CUDA tensor here raises "Expected all tensors to be on the same device".
-        batch["second_per_grid_ts"] = [float(x) for r in rows
-                                       for x in torch.as_tensor(r.prompt["second_per_grid_ts"]).reshape(-1).tolist()]
+    batch = {"input_ids": input_ids, "attention_mask": attention_mask}
+    for key in rows[0].prompt:
+        if key in ("input_ids", "attention_mask"):
+            continue
+        if key == "second_per_grid_ts":
+            # Python floats, as the HF processor returns them: get_rope_index multiplies them with a
+            # CPU arange, so a CUDA tensor here raises "Expected all tensors to be on the same device".
+            batch[key] = [float(x) for r in rows for x in torch.as_tensor(r.prompt[key]).reshape(-1).tolist()]
+            continue
+        values = [r.prompt[key] for r in rows]
+        if not all(torch.is_tensor(v) for v in values):
+            raise TypeError(f"cannot batch processor output {key!r} ({type(values[0]).__name__})")
+        if any(v.dim() == 2 and v.shape == r.prompt["input_ids"].shape for v, r in zip(values, rows)):
+            raise ValueError(f"processor output {key!r} is aligned with input_ids: collate_rows must pad it")
+        batch[key] = torch.cat(values)
     return batch, [len(r.response_ids) for r in rows]
 
 
 def to_device(batch: dict, device) -> dict:
-    """Move tensors to `device` (video in bf16); non-tensors such as second_per_grid_ts stay as is."""
+    """Move tensors to `device` (pixels in bf16); non-tensors such as second_per_grid_ts stay as is."""
     out = {k: (v.to(device) if torch.is_tensor(v) else v) for k, v in batch.items()}
-    out["pixel_values_videos"] = out["pixel_values_videos"].to(torch.bfloat16)
+    for key in PIXEL_KEYS:
+        if key in out:
+            out[key] = out[key].to(torch.bfloat16)
     return out
 
 
