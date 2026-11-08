@@ -24,13 +24,17 @@ esac
 export BASE_MODEL=${MODEL_PATH:-$_MODEL_ID} MODEL_TAG     # MODEL_PATH=<local dir> overrides the hub id
 
 # HF cache holding BASE_MODEL (compute nodes are offline). HF_HOME=... wins; otherwise the first of
-# these that has the model: ours, then where Adaptive-SEED's run.md downloads Qwen2.5 / Qwen3.
+# these that has the model (gdata before scratch). Checked with find_models.sh on 2026-11-08:
+#   Qwen2.5-VL-7B   /scratch/hn98/$USER/hf_cache
+#   Qwen3-VL-8B     /scratch/jp09/$USER/hf_cache_qwen3
+#   InternVL3.5-8B  /g/data/hn98/$USER/models/hf_cache_internvl35 (also /scratch/jp09/$USER/hf_cache_internvl35)
 _HUB_DIR="models--${BASE_MODEL//\//--}"
 if [ -z "${HF_HOME:-}" ]; then
+  _G=/g/data/$PROJECT_CODE/$USER/models
   for _d in "$S/hf_cache" \
-            "/g/data/$PROJECT_CODE/$USER/models/hf_cache_qwen25" "/g/data/$PROJECT_CODE/$USER/models/hf_cache_qwen3" \
-            "/g/data/$PROJECT_CODE/$USER/models/hf_cache_internvl" "/g/data/$PROJECT_CODE/$USER/models/hf_cache" \
-            "/scratch/jp09/$USER/hf_cache_qwen3" "/scratch/jp09/$USER/hf_cache_internvl" "/scratch/jp09/$USER/hf_cache"; do
+            "$_G/hf_cache_qwen25" "$_G/hf_cache_qwen3" "$_G/hf_cache_internvl35" "$_G/hf_cache_internvl" "$_G/hf_cache" "$_G" \
+            "/scratch/jp09/$USER/hf_cache_qwen3" "/scratch/jp09/$USER/hf_cache_internvl35" \
+            "/scratch/jp09/$USER/hf_cache_internvl" "/scratch/jp09/$USER/hf_cache"; do
     if [ -d "$_d/hub/$_HUB_DIR" ]; then HF_HOME=$_d; break; fi
   done
 fi
