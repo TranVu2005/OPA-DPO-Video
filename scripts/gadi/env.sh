@@ -23,12 +23,18 @@ case $MODEL in
 esac
 export BASE_MODEL=${MODEL_PATH:-$_MODEL_ID} MODEL_TAG     # MODEL_PATH=<local dir> overrides the hub id
 
-# HF cache holding BASE_MODEL (compute nodes are offline). HF_HOME=... wins; otherwise the first of
-# these that has the model (gdata before scratch). Checked with find_models.sh on 2026-11-08:
+# HF cache holding BASE_MODEL (compute nodes are offline). An HF_HOME that has the model wins
+# (qsub -v HF_HOME=...); an HF_HOME without it, e.g. exported by ~/.bashrc for Adaptive-SEED, is
+# ignored, and the first of these that has the model is used (gdata before scratch).
+# Checked with find_models.sh on 2026-11-08:
 #   Qwen2.5-VL-7B   /scratch/hn98/$USER/hf_cache
 #   Qwen3-VL-8B     /scratch/jp09/$USER/hf_cache_qwen3
 #   InternVL3.5-8B  /g/data/hn98/$USER/models/hf_cache_internvl35 (also /scratch/jp09/$USER/hf_cache_internvl35)
 _HUB_DIR="models--${BASE_MODEL//\//--}"
+if [ -n "${HF_HOME:-}" ] && [ ! -d "$HF_HOME/hub/$_HUB_DIR" ] && [ ! -d "$BASE_MODEL" ]; then
+  echo "env.sh: HF_HOME=$HF_HOME has no $BASE_MODEL; searching the usual caches" >&2
+  unset HF_HOME
+fi
 if [ -z "${HF_HOME:-}" ]; then
   _G=/g/data/$PROJECT_CODE/$USER/models
   for _d in "$S/hf_cache" \
@@ -39,7 +45,9 @@ if [ -z "${HF_HOME:-}" ]; then
   done
 fi
 export HF_HOME=${HF_HOME:-$S/hf_cache}
-export HF_HUB_CACHE=$HF_HOME/hub
+# Older variables override HF_HOME inside transformers / huggingface_hub; pin them all to one place.
+export HF_HUB_CACHE=$HF_HOME/hub HUGGINGFACE_HUB_CACHE=$HF_HOME/hub TRANSFORMERS_CACHE=$HF_HOME/hub
+echo "env.sh: MODEL=$MODEL BASE_MODEL=$BASE_MODEL HF_HOME=$HF_HOME" >&2
 if [ ! -d "$BASE_MODEL" ] && [ ! -d "$HF_HUB_CACHE/$_HUB_DIR" ]; then
   echo "env.sh: WARNING $BASE_MODEL is not in $HF_HUB_CACHE. Find it with scripts/gadi/find_models.sh," \
        "then qsub -v HF_HOME=<dir holding hub/$_HUB_DIR>; or download it on a login node." >&2
