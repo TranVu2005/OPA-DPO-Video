@@ -202,6 +202,30 @@ def test_model_family_and_answer_spelling():
     assert render_answer(P("qwen3"), "Yes. The man waves.") == "Yes. The man waves."  # long text untouched
 
 
+def test_encode_response_with_slow_tokenizer():
+    from opadpo_video.qwen import IM_END, encode_response
+
+    class Slow:  # InternVL's slow tokenizer: no return_offsets_mapping
+        is_fast = False
+        pieces = {1: "Yes", 2: ".", 3: " The", 4: " man", 5: " waves", 9: IM_END}
+
+        def __call__(self, text, add_special_tokens=False, **kw):
+            assert "return_offsets_mapping" not in kw
+            return {"input_ids": [1, 2, 3, 4, 5, 2]}
+
+        def decode(self, ids, **kw):
+            return "".join(self.pieces[i] for i in ids)
+
+        def convert_tokens_to_ids(self, tok):
+            return 9
+
+    text = "Yes. The man waves."
+    ids, offsets = encode_response(Slow(), text)
+    assert ids == [1, 2, 3, 4, 5, 2, 9]
+    assert offsets == [(0, 3), (3, 4), (4, 8), (8, 12), (12, 18), (18, 19), (19, 19)]
+    assert [text[a:b] for a, b in offsets[:3]] == ["Yes", ".", " The"]
+
+
 def test_seed_lora_targets_per_backbone():
     import re
 

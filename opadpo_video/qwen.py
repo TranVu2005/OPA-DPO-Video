@@ -283,10 +283,26 @@ def encode_prompt(processor, prompt: str, video: torch.Tensor, fps: float) -> di
     return dict(enc)
 
 
+def _decode_offsets(tokenizer, ids: list[int], n_chars: int) -> list[tuple[int, int]]:
+    """Char offsets from the lengths of decoded prefixes; only the span weights (sentence level) use them."""
+    offsets, start = [], 0
+    for i in range(len(ids)):
+        end = min(len(tokenizer.decode(ids[: i + 1], skip_special_tokens=False,
+                                       clean_up_tokenization_spaces=False)), n_chars)
+        end = max(end, start)
+        offsets.append((start, end))
+        start = end
+    return offsets
+
+
 def encode_response(tokenizer, text: str, add_eos: bool = True, max_tokens: int | None = None):
     """Token ids and char offsets of the response; <|im_end|> appended as EOS."""
-    enc = tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
-    ids, offsets = list(enc["input_ids"]), [tuple(o) for o in enc["offset_mapping"]]
+    if getattr(tokenizer, "is_fast", False):
+        enc = tokenizer(text, add_special_tokens=False, return_offsets_mapping=True)
+        ids, offsets = list(enc["input_ids"]), [tuple(o) for o in enc["offset_mapping"]]
+    else:  # InternVL's slow tokenizer (as its official code) has no offset mapping
+        ids = list(tokenizer(text, add_special_tokens=False)["input_ids"])
+        offsets = _decode_offsets(tokenizer, ids, len(text))
     if max_tokens is not None and len(ids) >= max_tokens:
         ids, offsets = ids[: max_tokens - 1], offsets[: max_tokens - 1]
         add_eos = False  # truncated: no EOS
