@@ -168,6 +168,7 @@ def load_model(cfg: Config, adapter: str | None = None, trainable: bool = False,
     if trainable and cfg.model.gradient_checkpointing:
         try:
             model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
+            print("gradient checkpointing enabled")
             model.enable_input_require_grads()
         except (AttributeError, NotImplementedError, ValueError) as e:  # remote-code models may lack it
             print(f"gradient checkpointing not enabled: {e}")

@@ -40,8 +40,9 @@ if [ -n "${BINARY:-}" ]; then
   ADAPTER=none; INIT=null; REF=ref_logps${MODEL_TAG}_base_$MASK
   EXTRA=(dpo.use_weights=false dpo.gamma_if="$GAMMA_IF" dpo.gamma_anc=0)
   HP=(model.lora_targets=seed model.lora_rank=16 model.lora_alpha=32 model.lora_dropout=0.05 train.warmup_ratio=0.05)
-  # InternVL's remote code is trained without checkpointing, as SEED (FAST: grad_ckpt=False); fits one H200.
-  if [ "$MODEL" = internvl ]; then HP+=(model.gradient_checkpointing=false); fi
+  # Gradient checkpointing stays on for every backbone here: InternVL runs eager attention (no
+  # flash-attn), and DPO's chosen + rejected pass without checkpointing ran out of the H200's 140GB
+  # (SFT alone peaked at 122GB). Checkpointing recomputes the same forward: same loss, only slower.
 elif [ "$MODEL" != qwen25 ]; then
   echo "MODEL=$MODEL supports only the yes/no baselines (BINARY=1); OPA-DPO needs the Qwen2.5 rollouts" >&2; exit 1
 elif [ -n "${PLAIN:-}" ]; then

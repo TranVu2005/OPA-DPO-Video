@@ -82,6 +82,7 @@ export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1         # compute nodes have no i
 export WANDB_MODE=offline
 export TMPDIR=${PBS_JOBFS:-/tmp}
 export OMP_NUM_THREADS=8 TOKENIZERS_PARALLELISM=false
+export PYTORCH_CUDA_ALLOC_CONF=${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}  # less fragmentation near the 140GB limit
 export PYTHONDONTWRITEBYTECODE=1                       # no .pyc: saves inodes on scratch
 export PYTHONPATH="$ROOT:${PYTHONPATH:-}"
 export NGPUS=${PBS_NGPUS:-1}
