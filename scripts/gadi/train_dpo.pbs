@@ -37,6 +37,7 @@ if [ -n "${BINARY:-}" ]; then
   GAMMA_IF=${GAMMA_IF:-0.2}
   LR=${LR:-1e-5}; EPOCHS=1; GLOBAL_BATCH=8
   if [ "$GAMMA_IF" = 0 ]; then NAME=binary_dpo_lr$LR$MODEL_TAG; else NAME=binary_dpo_${MASK}_lr$LR$MODEL_TAG; fi
+  NAME=$NAME${SUFFIX:-}                                # SUFFIX=_x: rerun into a fresh dir (an existing one resumes)
   ADAPTER=none; INIT=null; REF=ref_logps${MODEL_TAG}_base_$MASK
   EXTRA=(dpo.use_weights=false dpo.gamma_if="$GAMMA_IF" dpo.gamma_anc=0)
   HP=(model.lora_targets=seed model.lora_rank=16 model.lora_alpha=32 model.lora_dropout=0.05 train.warmup_ratio=0.05)

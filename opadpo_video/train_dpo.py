@@ -22,7 +22,7 @@ from .config import Config, cli
 from .data import ROLES, DPOCollator, DPODataset, unpack_slots
 from .losses import opa_dpo_loss
 from .precompute_ref import load_ref_logps
-from .qwen import load_model, load_processor, response_logprobs
+from .qwen import disable_base_dropout, load_model, load_processor, response_logprobs
 from .train_opa import _last_checkpoint, save_final, training_args
 
 
@@ -59,6 +59,7 @@ def main():
     ref = load_ref_logps(cfg, adapter)
     proc = load_processor(cfg)
     model = load_model(cfg, adapter=adapter, trainable=True)
+    disable_base_dropout(model)  # reference log-probs were computed in eval mode
     data = DPODataset(args.data or cfg.work / "dpo.jsonl", proc, cfg, ref_logps=ref)
     missing = [r["id"] for r in data.rows if r["id"] not in ref]
     if missing:

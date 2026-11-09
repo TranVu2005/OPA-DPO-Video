@@ -226,6 +226,25 @@ def test_encode_response_with_slow_tokenizer():
     assert [text[a:b] for a, b in offsets[:3]] == ["Yes", ".", " The"]
 
 
+def test_disable_base_dropout_keeps_lora_dropout():
+    import torch.nn as nn
+
+    from opadpo_video.qwen import disable_base_dropout
+
+    class DropPath(nn.Module):  # as timm's, used by InternVL's vision tower
+        def __init__(self, p):
+            super().__init__()
+            self.drop_prob = p
+
+    m = nn.Module()
+    m.vision = nn.Sequential(DropPath(0.1), nn.Dropout(0.1))
+    m.layer = nn.Module()
+    m.layer.lora_dropout = nn.ModuleDict({"default": nn.Dropout(0.05)})
+    assert disable_base_dropout(m) == {"dropout": 1, "drop_path": 1}
+    assert m.vision[0].drop_prob == 0 and m.vision[1].p == 0
+    assert m.layer.lora_dropout["default"].p == 0.05
+
+
 def test_seed_lora_targets_per_backbone():
     import re
 

@@ -177,6 +177,28 @@ def load_model(cfg: Config, adapter: str | None = None, trainable: bool = False,
     return model
 
 
+def disable_base_dropout(model) -> dict[str, int]:
+    """Turn off dropout / drop-path in the frozen backbone, keeping LoRA's own dropout.
+
+    DPO compares the policy (train mode) with reference log-probs computed in eval mode, so any
+    stochastic layer in the backbone makes the two disagree at step 0 (TRL's DPOTrainer disables
+    dropout for the same reason). InternVL's vision tower has drop-path; Qwen has none."""
+    import torch.nn as nn
+
+    off = {"dropout": 0, "drop_path": 0}
+    for name, m in model.named_modules():
+        if "lora_dropout" in name:
+            continue
+        if isinstance(m, nn.Dropout) and m.p > 0:
+            m.p = 0.0
+            off["dropout"] += 1
+        elif type(m).__name__ == "DropPath" and getattr(m, "drop_prob", 0) > 0:
+            m.drop_prob = 0.0
+            off["drop_path"] += 1
+    print(f"disabled in the backbone: {off['dropout']} dropout, {off['drop_path']} drop-path modules")
+    return off
+
+
 # Adaptive-SEED runtime.LORA_TARGETS (training/losses.py): LM attention q/k/v/o + vision-to-LM projector.
 SEED_LORA_TARGETS = {
     "qwen2_5": r"(.*\.layers\.\d+\.self_attn\.(q|k|v|o)_proj)|(.*visual\.merger\.mlp\.(0|2))",
