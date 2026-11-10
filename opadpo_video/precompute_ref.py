@@ -31,7 +31,8 @@ def ref_meta(cfg: Config, adapter: str | None) -> dict:
     return {"base_model": cfg.model.base_model, "adapter": adapter, "n_frames": v.n_frames,
             "frame_size": v.frame_size, "max_pixels": v.max_pixels, "min_pixels": v.min_pixels,
             "mask_method": v.mask_method, "mask_ratio": v.mask_ratio,
-            "max_response_tokens": cfg.train.max_response_tokens}
+            "max_response_tokens": cfg.train.max_response_tokens,
+            "answer_token_only": cfg.train.answer_token_only}
 
 
 def load_ref_logps(cfg: Config, adapter: str | None) -> dict:
@@ -40,6 +41,7 @@ def load_ref_logps(cfg: Config, adapter: str | None) -> dict:
     if not meta_path.exists():
         raise SystemExit(f"{meta_path} missing: run precompute_ref first")
     saved, wanted = json.loads(meta_path.read_text()), ref_meta(cfg, adapter)
+    saved.setdefault("answer_token_only", False)  # written before the option existed
     diff = {k: (saved.get(k), v) for k, v in wanted.items() if saved.get(k) != v}
     if diff:
         raise SystemExit(f"reference log-probs in {ref_dir} were made with other settings "

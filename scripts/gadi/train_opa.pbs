@@ -6,6 +6,8 @@
 #   qsub -v BINARY=1 scripts/gadi/train_opa.pbs    -> $OUT/binary_sft  (SFT on yes/no labels, no expert)
 #   qsub -v BINARY=1,MODEL=qwen3 scripts/gadi/train_opa.pbs     -> $OUT/binary_sft_qwen3
 #   qsub -v BINARY=1,MODEL=internvl scripts/gadi/train_opa.pbs  -> $OUT/binary_sft_internvl
+#   qsub -v BINARY=1,FULL=1,MODEL=qwen3 scripts/gadi/train_opa.pbs  -> $OUT/binary_sft_qwen3_full
+#       (docs/unified_config.md: whole SEED TRAIN split, answer-token loss; run prepare_binary.sh first)
 #PBS -N opadpo_opa
 #PBS -P hn98
 #PBS -q gpuhopper
@@ -21,9 +23,12 @@ set -euo pipefail
 source scripts/gadi/env.sh
 NAME=opa; EPOCHS=2; LR=2e-5; GLOBAL_BATCH=128; HP=()
 if [ -n "${BINARY:-}" ]; then
-  COMMON=(model.base_model="$BASE_MODEL" work_dir="$OUT/work_binary")
-  NAME=binary_sft$MODEL_TAG; EPOCHS=1; LR=1e-4; GLOBAL_BATCH=8
+  COMMON=(model.base_model="$BASE_MODEL" work_dir="$OUT/work_binary${FULL:+_all}")
+  NAME=binary_sft$MODEL_TAG${FULL:+_full}; EPOCHS=1; LR=1e-4; GLOBAL_BATCH=8
   HP=(model.lora_targets=seed model.lora_rank=16 model.lora_alpha=32 model.lora_dropout=0.05 train.warmup_ratio=0.05)
+  # FULL=1: exactly docs/unified_config.md section 7 = the whole SEED TRAIN split (temporal +
+  # object_relation, from prepare_binary.sh), loss on the answer token only, seed 0.
+  if [ -n "${FULL:-}" ]; then HP+=(train.answer_token_only=true train.seed=0); fi
   # InternVL's remote code is trained without checkpointing, as SEED (FAST: grad_ckpt=False); fits one H200.
   if [ "$MODEL" = internvl ]; then HP+=(model.gradient_checkpointing=false); fi
 elif [ "$MODEL" != qwen25 ]; then

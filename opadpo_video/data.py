@@ -16,11 +16,21 @@ import torch
 from torch.utils.data import Dataset
 
 from .config import Config
-from .qwen import Row, check_answer_tokens, collate_rows, encode_prompt, encode_response, prepare_video, render_answer
+from .qwen import (Row, answer_ids, check_answer_tokens, collate_rows, encode_prompt, encode_response,
+                   prepare_video, render_answer)
 from .weights import span_weights_to_tokens
 
 # DPO roles: response x video. "_m" = original video m, "_mm" = distorted video m'.
 ROLES = ("gt_m", "gen_m", "rev_m", "gt_mm", "rev_mm")
+YES_NO = ("Yes.", "No.")  # yes/no labels written by build_binary
+
+
+def answer_token(processor, cfg: Config, text: str) -> list[int] | None:
+    """[answer token id] for a yes/no label when train.answer_token_only, else None."""
+    if not cfg.train.answer_token_only or text not in YES_NO:
+        return None
+    yes, no = answer_ids(processor)
+    return [yes if text == "Yes." else no]
 
 
 def read_jsonl(path: str | Path) -> list[dict]:
@@ -55,8 +65,10 @@ class SFTDataset(Dataset):
     def __getitem__(self, i):
         r = self.rows[i]
         video, fps = prepare_video(r["video"], self.cfg)
-        ids, _ = encode_response(self.proc.tokenizer, render_answer(self.proc, r["response"]),
-                                 max_tokens=self.cfg.train.max_response_tokens)
+        ids = answer_token(self.proc, self.cfg, r["response"])
+        if ids is None:
+            ids, _ = encode_response(self.proc.tokenizer, render_answer(self.proc, r["response"]),
+                                     max_tokens=self.cfg.train.max_response_tokens)
         return Row(encode_prompt(self.proc, r["prompt"], video, fps), ids)
 
 
@@ -89,6 +101,9 @@ class DPODataset(Dataset):
         return len(self.rows)
 
     def _response(self, text: str, spans=None, add_eos=True):
+        ids = answer_token(self.proc, self.cfg, text)
+        if ids is not None:  # one token, weight 1 (a yes/no label is one sentence)
+            return (ids, None, None) if spans is None else (ids, torch.ones(1), torch.ones(1))
         # render_answer only changes the case of "Yes."/"No.", so the character spans still hold.
         ids, offsets = encode_response(
             self.proc.tokenizer, render_answer(self.proc, text), add_eos=add_eos,

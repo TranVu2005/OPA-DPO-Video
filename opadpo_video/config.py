@@ -101,6 +101,9 @@ class TrainConfig:
     per_device_train_batch_size: int = 1
     gradient_accumulation_steps: int = 32
     max_response_tokens: int = 1024
+    # Yes/no labels ("Yes." / "No."): train on the answer token alone, the one the evaluation scores,
+    # with no "." and no EOS, as Adaptive-SEED's CE on the answer position.
+    answer_token_only: bool = False
     save_steps: int = 100
     logging_steps: int = 1
     seed: int = 42

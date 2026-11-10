@@ -122,8 +122,9 @@ Các dòng SFT yes/no và DPO yes/no hiện có được train với hai khác b
 1. Dữ liệu train chỉ có `temporal` (130 câu, 17 bước) thay vì cả 2 subset (khoảng 300 câu, khoảng 38 bước).
 2. Loss tính trên cả câu trả lời (`Yes` + `.` + `<|im_end|>`) thay vì chỉ trên token đáp án như SEED.
 
-Kết quả eval của các dòng này vẫn đúng quy trình ở mục 1–5. Muốn khớp hoàn toàn mục 7 thì phải
-chạy lại sau khi sửa hai điểm trên.
+Kết quả eval của các dòng này vẫn đúng quy trình ở mục 1–5. Các run có `FULL=1`
+(`train_opa.pbs`, `train_dpo.pbs`, dữ liệu từ `scripts/gadi/prepare_binary.sh`) khớp hoàn toàn mục 7:
+train trên cả TRAIN split, loss / log-prob chỉ trên token đáp án, seed 0. Output có hậu tố `_full`.
 
 ## 9. Cách nhanh nhất để chấm checkpoint của phương pháp khác
 

@@ -226,6 +226,30 @@ def test_encode_response_with_slow_tokenizer():
     assert [text[a:b] for a, b in offsets[:3]] == ["Yes", ".", " The"]
 
 
+def test_answer_token_only_trains_the_scored_token():
+    from opadpo_video.data import DPODataset, answer_token
+
+    class Tok:
+        ids = {"yes": 9454, "no": 2152, "Yes": 9580, "No": 2753}
+
+        def encode(self, word, add_special_tokens=False):
+            return [self.ids[word]]
+
+    class Proc:
+        opadpo_family = "qwen3"
+        tokenizer = Tok()
+
+    cfg = load_config(None, ["train.answer_token_only=true"])
+    assert answer_token(Proc(), cfg, "Yes.") == [9454] and answer_token(Proc(), cfg, "No.") == [2152]
+    assert answer_token(Proc(), cfg, "Yes. The man waves.") is None  # free text keeps the full response
+    assert answer_token(Proc(), load_config(None, []), "Yes.") is None  # option off: unchanged
+
+    ds = DPODataset.__new__(DPODataset)
+    ds.proc, ds.cfg = Proc(), cfg
+    ids, w_hal, w_img = ds._response("No.", [[0, 3, 1.0, 1.0]])
+    assert ids == [2152] and w_hal.tolist() == [1.0] and w_img.tolist() == [1.0]
+
+
 def test_disable_base_dropout_keeps_lora_dropout():
     import torch.nn as nn
 

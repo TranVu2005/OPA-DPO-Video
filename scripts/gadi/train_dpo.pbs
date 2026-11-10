@@ -16,6 +16,8 @@
 #   qsub -v PLAIN=1 scripts/gadi/train_dpo.pbs                -> $OUT/dpo_plain
 #   qsub -v BINARY=1,GAMMA_IF=0,LR=1e-5 scripts/gadi/train_dpo.pbs    -> $OUT/binary_dpo_lr1e-5          ("DPO yes/no")
 #   qsub -v BINARY=1,MASK=shuffle,LR=1e-5 scripts/gadi/train_dpo.pbs  -> $OUT/binary_dpo_shuffle_lr1e-5  ("DPO yes/no + m'")
+#   qsub -v BINARY=1,FULL=1,GAMMA_IF=0,LR=1e-4,MODEL=qwen3 scripts/gadi/train_dpo.pbs -> $OUT/binary_dpo_lr1e-4_qwen3_full
+#       (docs/unified_config.md: whole SEED TRAIN split, answer-token log-probs; run prepare_binary.sh first)
 #PBS -N opadpo_dpo
 #PBS -P hn98
 #PBS -q gpuhopper
@@ -32,15 +34,19 @@ source scripts/gadi/env.sh
 MASK=${MASK:-pixel}
 EPOCHS=4; GLOBAL_BATCH=32; HP=()
 if [ -n "${BINARY:-}" ]; then
-  WORK="$OUT/work_binary"
+  WORK="$OUT/work_binary${FULL:+_all}"
   COMMON=(model.base_model="$BASE_MODEL" work_dir="$WORK")
   GAMMA_IF=${GAMMA_IF:-0.2}
   LR=${LR:-1e-5}; EPOCHS=1; GLOBAL_BATCH=8
   if [ "$GAMMA_IF" = 0 ]; then NAME=binary_dpo_lr$LR$MODEL_TAG; else NAME=binary_dpo_${MASK}_lr$LR$MODEL_TAG; fi
-  NAME=$NAME${SUFFIX:-}                                # SUFFIX=_x: rerun into a fresh dir (an existing one resumes)
+  NAME=$NAME${FULL:+_full}${SUFFIX:-}                  # SUFFIX=_x: rerun into a fresh dir (an existing one resumes)
   ADAPTER=none; INIT=null; REF=ref_logps${MODEL_TAG}_base_$MASK
   EXTRA=(dpo.use_weights=false dpo.gamma_if="$GAMMA_IF" dpo.gamma_anc=0)
   HP=(model.lora_targets=seed model.lora_rank=16 model.lora_alpha=32 model.lora_dropout=0.05 train.warmup_ratio=0.05)
+  # FULL=1: exactly docs/unified_config.md section 7 = the whole SEED TRAIN split (temporal +
+  # object_relation, from prepare_binary.sh), log-probs of the answer token only, seed 0.
+  # The flag also goes to precompute_ref (through COMMON), so the reference scores the same token.
+  if [ -n "${FULL:-}" ]; then COMMON+=(train.answer_token_only=true); HP+=(train.seed=0); fi
   # Gradient checkpointing stays on for every backbone here: InternVL runs eager attention (no
   # flash-attn), and DPO's chosen + rejected pass without checkpointing ran out of the H200's 140GB
   # (SFT alone peaked at 122GB). Checkpointing recomputes the same forward: same loss, only slower.
