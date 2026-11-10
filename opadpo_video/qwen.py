@@ -30,9 +30,11 @@ from .video import load_video, mask_video, sample_seed
 
 IM_END = "<|im_end|>"
 FAMILIES = ("qwen2_5", "qwen3", "internvl")
-# Token each model actually emits after "Answer with yes or no." (Adaptive-SEED models/qwen.py:
-# Qwen3-VL answers lowercase, ~99% of the mass on 'yes'/'no').
-ANSWER_WORDS = {"qwen2_5": ("Yes", "No"), "qwen3": ("yes", "no"), "internvl": ("Yes", "No")}
+# Answer tokens of the yes/no margin, the same for every backbone (docs/unified_config.md section 4).
+# Qwen3-VL itself answers lowercase (~99% of the mass on 'yes'/'no', <0.5% on 'Yes'/'No'), so its
+# margin on 'Yes'/'No' can disagree with the answer it would generate; this follows the protocol the
+# reported Adaptive-SEED Qwen3 numbers used. ("yes", "no") is the lowercase alternative.
+ANSWER_WORDS = {"qwen2_5": ("Yes", "No"), "qwen3": ("Yes", "No"), "internvl": ("Yes", "No")}
 INTERNVL_FRAME_SIZE = 448  # one 448px tile per frame (no dynamic tiling), as Adaptive-SEED
 IMAGENET_MEAN, IMAGENET_STD = (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
 

@@ -22,7 +22,7 @@ from torch.utils.data import DataLoader, Subset
 
 from .config import Config, cli
 from .data import DPOCollator, DPODataset, unpack_slots
-from .qwen import load_model, load_processor, response_logprobs
+from .qwen import ANSWER_WORDS, load_model, load_processor, model_family, response_logprobs
 
 
 def ref_meta(cfg: Config, adapter: str | None) -> dict:
@@ -32,7 +32,8 @@ def ref_meta(cfg: Config, adapter: str | None) -> dict:
             "frame_size": v.frame_size, "max_pixels": v.max_pixels, "min_pixels": v.min_pixels,
             "mask_method": v.mask_method, "mask_ratio": v.mask_ratio,
             "max_response_tokens": cfg.train.max_response_tokens,
-            "answer_token_only": cfg.train.answer_token_only}
+            "answer_token_only": cfg.train.answer_token_only,
+            "answer_words": list(ANSWER_WORDS[model_family(cfg.model.base_model)])}
 
 
 def load_ref_logps(cfg: Config, adapter: str | None) -> dict:
@@ -42,6 +43,8 @@ def load_ref_logps(cfg: Config, adapter: str | None) -> dict:
         raise SystemExit(f"{meta_path} missing: run precompute_ref first")
     saved, wanted = json.loads(meta_path.read_text()), ref_meta(cfg, adapter)
     saved.setdefault("answer_token_only", False)  # written before the option existed
+    # Written before answer_words was recorded: Qwen3 used lowercase then, the others Yes/No.
+    saved.setdefault("answer_words", ["yes", "no"] if model_family(saved["base_model"]) == "qwen3" else ["Yes", "No"])
     diff = {k: (saved.get(k), v) for k, v in wanted.items() if saved.get(k) != v}
     if diff:
         raise SystemExit(f"reference log-probs in {ref_dir} were made with other settings "
@@ -56,8 +59,17 @@ def main():
     cfg, args = cli(__doc__, lambda p: (p.add_argument("--adapter", required=True,
                                                        help="reference LoRA (pi_OPA), or 'none' for the base model"),
                                         p.add_argument("--data", default=None),
-                                        p.add_argument("--batch_size", type=int, default=2)))
+                                        p.add_argument("--batch_size", type=int, default=2),
+                                        p.add_argument("--if_stale", action="store_true",
+                                                       help="skip when <ref_dir> already matches these settings")))
     adapter = None if args.adapter.lower() == "none" else args.adapter
+    if args.if_stale and (cfg.work / cfg.dpo.ref_dir / "meta.json").exists():
+        try:
+            load_ref_logps(cfg, adapter)
+            print(f"reference log-probs in {cfg.work / cfg.dpo.ref_dir} are up to date")
+            return
+        except SystemExit as e:
+            print(f"recomputing: {e}")
     rank, world = int(os.environ.get("RANK", 0)), int(os.environ.get("WORLD_SIZE", 1))
     torch.cuda.set_device(int(os.environ.get("LOCAL_RANK", 0)))
     proc = load_processor(cfg)

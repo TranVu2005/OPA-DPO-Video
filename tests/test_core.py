@@ -197,8 +197,9 @@ def test_model_family_and_answer_spelling():
         def __init__(self, fam):
             self.opadpo_family = fam
 
-    assert render_answer(P("qwen3"), "Yes.") == "yes." and render_answer(P("qwen3"), "No.") == "no."
-    assert render_answer(P("qwen2_5"), "Yes.") == "Yes." and render_answer(P("internvl"), "No.") == "No."
+    # Every backbone is scored on Yes/No (docs/unified_config.md section 4), Qwen3 included.
+    for fam in ("qwen2_5", "qwen3", "internvl"):
+        assert render_answer(P(fam), "Yes.") == "Yes." and render_answer(P(fam), "No.") == "No."
     assert render_answer(P("qwen3"), "Yes. The man waves.") == "Yes. The man waves."  # long text untouched
 
 
@@ -240,14 +241,35 @@ def test_answer_token_only_trains_the_scored_token():
         tokenizer = Tok()
 
     cfg = load_config(None, ["train.answer_token_only=true"])
-    assert answer_token(Proc(), cfg, "Yes.") == [9454] and answer_token(Proc(), cfg, "No.") == [2152]
+    assert answer_token(Proc(), cfg, "Yes.") == [9580] and answer_token(Proc(), cfg, "No.") == [2753]
     assert answer_token(Proc(), cfg, "Yes. The man waves.") is None  # free text keeps the full response
     assert answer_token(Proc(), load_config(None, []), "Yes.") is None  # option off: unchanged
 
     ds = DPODataset.__new__(DPODataset)
     ds.proc, ds.cfg = Proc(), cfg
     ids, w_hal, w_img = ds._response("No.", [[0, 3, 1.0, 1.0]])
-    assert ids == [2152] and w_hal.tolist() == [1.0] and w_img.tolist() == [1.0]
+    assert ids == [2753] and w_hal.tolist() == [1.0] and w_img.tolist() == [1.0]
+
+
+def test_old_qwen3_reference_is_stale_after_answer_token_change(tmp_path):
+    import json
+
+    import pytest
+
+    from opadpo_video.precompute_ref import load_ref_logps, ref_meta
+
+    def check(model):
+        cfg = load_config(None, [f"model.base_model={model}", f"work_dir={tmp_path.as_posix()}",
+                                 "dpo.ref_dir=ref"])
+        old = ref_meta(cfg, None)
+        del old["answer_words"], old["answer_token_only"]  # meta written by the older code
+        (tmp_path / "ref").mkdir(exist_ok=True)
+        (tmp_path / "ref" / "meta.json").write_text(json.dumps(old))
+        return cfg
+
+    with pytest.raises(SystemExit):  # Qwen3 references were made on yes/no: recompute
+        load_ref_logps(check("Qwen/Qwen3-VL-8B-Instruct"), None)
+    assert load_ref_logps(check("Qwen/Qwen2.5-VL-7B-Instruct"), None) == {}  # unchanged: reused
 
 
 def test_disable_base_dropout_keeps_lora_dropout():

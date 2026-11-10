@@ -61,9 +61,8 @@ else
 fi
 ARGS=("${COMMON[@]}" video.mask_method="$MASK" dpo.ref_dir="$REF")
 
-if [ ! -f "$WORK/$REF/meta.json" ]; then
-  python -m opadpo_video.precompute_ref --adapter "$ADAPTER" "${ARGS[@]}"
-fi
+# Computes the reference only when missing or made with other settings (e.g. other answer tokens).
+python -m opadpo_video.precompute_ref --if_stale --adapter "$ADAPTER" "${ARGS[@]}"
 python -m opadpo_video.train_dpo "${ARGS[@]}" "${EXTRA[@]}" "${HP[@]}" train.init_adapter="$INIT" \
   train.output_dir="$OUT/$NAME" train.num_train_epochs=$EPOCHS train.learning_rate=${LR:-1e-6} \
   train.per_device_train_batch_size=1 train.gradient_accumulation_steps=$((GLOBAL_BATCH / NGPUS))
