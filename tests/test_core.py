@@ -272,6 +272,28 @@ def test_old_qwen3_reference_is_stale_after_answer_token_change(tmp_path):
     assert load_ref_logps(check("Qwen/Qwen2.5-VL-7B-Instruct"), None) == {}  # unchanged: reused
 
 
+def test_calibration_threshold_and_metrics():
+    from opadpo_video.calibrate import calibrate_run, pick_threshold
+
+    # yes-biased model: every "no" question sits at a small positive margin
+    assert pick_threshold([3.0, 2.0, 0.5, 0.4], [True, True, False, False]) == 1.25
+    assert pick_threshold([1.0, -1.0], [True, False]) == 0.0  # already right: tie goes to 0
+
+    items, marg = [], {}
+    for split, n in (("VH_VAL", 2), ("VH_TEST", 2)):
+        for p in range(n):
+            for role, ans, m in (("basic", "yes", 2.0), ("hallucination", "no", 0.5)):
+                k = f"{split}/{p}|{role}"
+                items.append({"id": k, "split": split, "subset": "temporal", "pair_id": f"{split}/{p}",
+                              "answer": ans})
+                marg[k] = m
+    t, rows = calibrate_run(items, marg)
+    test = {r["split"]: r for r in rows}["VH_TEST"]
+    assert t == 1.25
+    assert test["q_acc"] == 0.5 and test["pair_acc"] == 0.0 and test["yes_rate"] == 1.0
+    assert test["q_acc_cal"] == 1.0 and test["pair_acc_cal"] == 1.0 and test["yes_rate_cal"] == 0.5
+
+
 def test_disable_base_dropout_keeps_lora_dropout():
     import torch.nn as nn
 

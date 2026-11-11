@@ -123,7 +123,7 @@ def main():
     if todo:
         proc = load_processor(cfg)
         tok = proc.tokenizer
-        yes, no = answer_ids(proc)  # "Yes"/"No"; "yes"/"no" for Qwen3-VL (as Adaptive-SEED)
+        yes, no = answer_ids(proc)  # "Yes"/"No" for every backbone (docs/unified_config.md section 4)
         model = load_model(cfg, adapter=args.adapter, device_map={"": 0} if torch.cuda.is_available() else None)
         with open(marg_path, "a", encoding="utf-8") as f, torch.no_grad():
             for n, it in enumerate(todo, 1):
