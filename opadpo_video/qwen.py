@@ -209,11 +209,22 @@ SEED_LORA_TARGETS = {
 }
 
 
+# Ablation of the SEED targets: LM attention q/k/v/o only; the projector (merger / mlp1) and the
+# vision encoder stay frozen. Same r / alpha / lr / data, so the difference isolates the projector.
+LANGUAGE_ATTENTION_TARGETS = {
+    "qwen2_5": r".*\.layers\.\d+\.self_attn\.(q|k|v|o)_proj",
+    "qwen3": r".*\.layers\.\d+\.self_attn\.(q|k|v|o)_proj",
+    "internvl": r".*language_model\.model\.layers\.\d+\.self_attn\.(q|k|v|o)_proj",
+}
+
+
 def lora_target_regex(lora_vision: bool, targets: str = "paper", family: str = "qwen2_5") -> str:
     if targets == "seed":
         return SEED_LORA_TARGETS[family]
+    if targets == "language_attention":
+        return LANGUAGE_ATTENTION_TARGETS[family]
     if targets != "paper":
-        raise ValueError(f"model.lora_targets must be paper or seed, got {targets!r}")
+        raise ValueError(f"model.lora_targets must be paper, seed or language_attention, got {targets!r}")
     if family != "qwen2_5":
         raise ValueError(f"lora_targets=paper is defined for Qwen2.5-VL only; use model.lora_targets=seed for {family}")
     # Language model linears; optionally the ViT blocks and the patch merger too.

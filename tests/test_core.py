@@ -294,6 +294,28 @@ def test_calibration_threshold_and_metrics():
     assert test["q_acc_cal"] == 1.0 and test["pair_acc_cal"] == 1.0 and test["yes_rate_cal"] == 0.5
 
 
+def test_language_attention_targets_skip_projector_and_vision():
+    import re
+
+    from opadpo_video.qwen import lora_target_regex
+
+    names = {
+        "qwen2_5": ("base_model.model.model.layers.3.self_attn.v_proj",
+                    ["base_model.model.visual.merger.mlp.0", "base_model.model.visual.blocks.0.attn.qkv",
+                     "base_model.model.model.layers.3.mlp.up_proj"]),
+        "qwen3": ("base_model.model.model.language_model.layers.3.self_attn.o_proj",
+                  ["model.visual.merger.linear_fc1", "model.visual.blocks.0.attn.qkv",
+                   "model.visual.deepstack_merger_list.0.linear_fc1"]),
+        "internvl": ("base_model.model.language_model.model.layers.3.self_attn.q_proj",
+                     ["base_model.model.mlp1.1", "base_model.model.vision_model.encoder.layers.0.attn.qkv"]),
+    }
+    for fam, (keep, frozen) in names.items():
+        rx = re.compile(lora_target_regex(True, "language_attention", fam))
+        assert rx.fullmatch(keep), (fam, keep)
+        assert not any(rx.fullmatch(n) for n in frozen), fam
+        assert re.compile(lora_target_regex(True, "seed", fam)).fullmatch(keep)  # a subset of the SEED targets
+
+
 def test_disable_base_dropout_keeps_lora_dropout():
     import torch.nn as nn
 

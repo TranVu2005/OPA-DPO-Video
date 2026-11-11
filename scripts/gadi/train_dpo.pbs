@@ -31,6 +31,11 @@
 #PBS -j oe
 set -euo pipefail
 source scripts/gadi/env.sh
+# LORA=seed (default: LM attention + projector, docs/unified_config.md section 7) or
+# LORA=language_attention (LM attention only, projector and vision frozen; output dir gets _lang_attn).
+LORA=${LORA:-seed}
+case $LORA in seed) LORA_TAG="" ;; language_attention) LORA_TAG=_lang_attn ;;
+  *) echo "LORA must be seed or language_attention (got $LORA)" >&2; exit 1 ;; esac
 MASK=${MASK:-pixel}
 EPOCHS=4; GLOBAL_BATCH=32; HP=()
 if [ -n "${BINARY:-}" ]; then
@@ -39,10 +44,10 @@ if [ -n "${BINARY:-}" ]; then
   GAMMA_IF=${GAMMA_IF:-0.2}
   LR=${LR:-1e-5}; EPOCHS=1; GLOBAL_BATCH=8
   if [ "$GAMMA_IF" = 0 ]; then NAME=binary_dpo_lr$LR$MODEL_TAG; else NAME=binary_dpo_${MASK}_lr$LR$MODEL_TAG; fi
-  NAME=$NAME${FULL:+_full}${SUFFIX:-}                  # SUFFIX=_x: rerun into a fresh dir (an existing one resumes)
+  NAME=$NAME${FULL:+_full}$LORA_TAG${SUFFIX:-}                  # SUFFIX=_x: rerun into a fresh dir (an existing one resumes)
   ADAPTER=none; INIT=null; REF=ref_logps${MODEL_TAG}_base_$MASK
   EXTRA=(dpo.use_weights=false dpo.gamma_if="$GAMMA_IF" dpo.gamma_anc=0)
-  HP=(model.lora_targets=seed model.lora_rank=16 model.lora_alpha=32 model.lora_dropout=0.05 train.warmup_ratio=0.05)
+  HP=(model.lora_targets=$LORA model.lora_rank=16 model.lora_alpha=32 model.lora_dropout=0.05 train.warmup_ratio=0.05)
   # FULL=1: exactly docs/unified_config.md section 7 = the whole SEED TRAIN split (temporal +
   # object_relation, from prepare_binary.sh), log-probs of the answer token only, seed 0.
   # The flag also goes to precompute_ref (through COMMON), so the reference scores the same token.

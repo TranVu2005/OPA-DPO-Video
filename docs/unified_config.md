@@ -119,6 +119,19 @@ InternVL3.5: (.*language_model\.model\.layers\.\d+\.self_attn\.(q|k|v|o)_proj)|(
 
 Số tham số train được: 10,395,648 với Qwen2.5-VL; 15,597,568 với InternVL3.5.
 
+**Ablation `language_attention`:** chỉ gắn LoRA vào q/k/v/o của LM, đóng băng projector (merger / `mlp1`)
+và vision encoder; giữ nguyên r, α, lr, dữ liệu và eval. Dùng để đo riêng ảnh hưởng của việc train
+projector. Nếu báo cáo ablation này thì chạy nó cho **mọi phương pháp** so sánh (SFT, DPO, SEED), ghi
+rõ số tham số train được, và để kết quả ở dòng riêng. Regex:
+
+```text
+Qwen2.5-VL, Qwen3-VL: .*\.layers\.\d+\.self_attn\.(q|k|v|o)_proj
+InternVL3.5         : .*language_model\.model\.layers\.\d+\.self_attn\.(q|k|v|o)_proj
+```
+
+Trong OPA-DPO-Video: `LORA=language_attention` cho `train_opa.pbs` / `train_dpo.pbs`; output có hậu tố
+`_lang_attn`.
+
 Hàm loss do từng phương pháp quy định, và phải ghi rõ trong báo cáo, cùng β và các hệ số riêng. Với
 phương pháp dạng DPO, reference là mô hình gốc.
 

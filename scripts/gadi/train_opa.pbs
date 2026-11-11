@@ -8,6 +8,8 @@
 #   qsub -v BINARY=1,MODEL=internvl scripts/gadi/train_opa.pbs  -> $OUT/binary_sft_internvl
 #   qsub -v BINARY=1,FULL=1,MODEL=qwen3 scripts/gadi/train_opa.pbs  -> $OUT/binary_sft_qwen3_full
 #       (docs/unified_config.md: whole SEED TRAIN split, answer-token loss; run prepare_binary.sh first)
+#   qsub -v BINARY=1,FULL=1,LORA=language_attention,MODEL=qwen3 ... -> $OUT/binary_sft_qwen3_full_lang_attn
+#       (ablation: LoRA on LM attention only, projector frozen)
 #PBS -N opadpo_opa
 #PBS -P hn98
 #PBS -q gpuhopper
@@ -21,11 +23,16 @@
 #PBS -j oe
 set -euo pipefail
 source scripts/gadi/env.sh
+# LORA=seed (default: LM attention + projector, docs/unified_config.md section 7) or
+# LORA=language_attention (LM attention only, projector and vision frozen; output dir gets _lang_attn).
+LORA=${LORA:-seed}
+case $LORA in seed) LORA_TAG="" ;; language_attention) LORA_TAG=_lang_attn ;;
+  *) echo "LORA must be seed or language_attention (got $LORA)" >&2; exit 1 ;; esac
 NAME=opa; EPOCHS=2; LR=2e-5; GLOBAL_BATCH=128; HP=()
 if [ -n "${BINARY:-}" ]; then
   COMMON=(model.base_model="$BASE_MODEL" work_dir="$OUT/work_binary${FULL:+_all}")
-  NAME=binary_sft$MODEL_TAG${FULL:+_full}; EPOCHS=1; LR=1e-4; GLOBAL_BATCH=8
-  HP=(model.lora_targets=seed model.lora_rank=16 model.lora_alpha=32 model.lora_dropout=0.05 train.warmup_ratio=0.05)
+  NAME=binary_sft$MODEL_TAG${FULL:+_full}$LORA_TAG; EPOCHS=1; LR=1e-4; GLOBAL_BATCH=8
+  HP=(model.lora_targets=$LORA model.lora_rank=16 model.lora_alpha=32 model.lora_dropout=0.05 train.warmup_ratio=0.05)
   # FULL=1: exactly docs/unified_config.md section 7 = the whole SEED TRAIN split (temporal +
   # object_relation, from prepare_binary.sh), loss on the answer token only, seed 0.
   if [ -n "${FULL:-}" ]; then HP+=(train.answer_token_only=true train.seed=0); fi
