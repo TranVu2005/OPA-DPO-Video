@@ -7,6 +7,7 @@ whole backbone (vision encoder and merger included).
 """
 from __future__ import annotations
 
+from collections import defaultdict
 from pathlib import Path
 
 import torch
@@ -14,7 +15,50 @@ from transformers import Trainer, TrainingArguments
 
 from .config import Config, cli, total_steps
 from .data import SFTCollator, SFTDataset
-from .qwen import load_model, load_processor
+from .losses import anchored_loss
+from .qwen import _lm_head_last, load_model, load_processor
+
+
+class AnchoredSFTTrainer(Trainer):
+    """SFT on the answer token, anchored to the base model (train.kl_to_base). The base logits come from
+    the same forward with the LoRA disabled, so nothing has to be precomputed."""
+
+    def __init__(self, *a, kl_weight: float, **kw):
+        super().__init__(*a, **kw)
+        self.kl_weight = kl_weight
+        # The loss below is a mean over the micro-batch, so the Trainer must average the accumulation
+        # steps itself (as it does for any model without loss kwargs).
+        self.model_accepts_loss_kwargs = False
+        self._metrics = defaultdict(list)
+
+    def compute_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        inputs = dict(inputs)
+        target = inputs.pop("labels")[:, -1]  # answer_token_only: the one label is the last token
+        # Position -2 predicts the answer token (rows are left-padded). The base pass runs first, so its
+        # activations are freed before the student's are stored for the backward.
+        with _lm_head_last(model, 2):
+            with torch.no_grad(), _unwrap_peft(model).disable_adapter():
+                base = model(**inputs, use_cache=False).logits[:, 0].float()
+            student = model(**inputs, use_cache=False).logits[:, 0].float()
+        loss, ce, kl = anchored_loss(student, base, target, self.kl_weight)
+        with torch.no_grad():
+            self._metrics["ce"].append(float(ce.mean()))
+            self._metrics["kl_base"].append(float(kl.mean()))
+            self._metrics["p_target"].append(float(student.softmax(-1).gather(1, target[:, None]).mean()))
+        return loss.mean()
+
+    def log(self, logs, *args, **kwargs):
+        if self._metrics and "loss" in logs:
+            logs.update({f"sft/{k}": sum(v) / len(v) for k, v in self._metrics.items()})
+            self._metrics.clear()
+        super().log(logs, *args, **kwargs)
+
+
+def _unwrap_peft(model):
+    """The PeftModel inside any accelerate / DDP wrapper (it owns disable_adapter)."""
+    while not hasattr(model, "disable_adapter") and hasattr(model, "module"):
+        model = model.module
+    return model
 
 
 def training_args(cfg: Config, n_examples: int | None = None, **overrides) -> TrainingArguments:
@@ -48,8 +92,15 @@ def main():
     proc = load_processor(cfg)
     model = load_model(cfg, adapter=cfg.train.init_adapter, trainable=True)
     data = SFTDataset(args.data or cfg.work / "sft.jsonl", proc, cfg)
-    trainer = Trainer(model=model, args=training_args(cfg, len(data)), train_dataset=data,
-                      data_collator=SFTCollator(proc.tokenizer.pad_token_id))
+    common = dict(model=model, args=training_args(cfg, len(data)), train_dataset=data,
+                  data_collator=SFTCollator(proc.tokenizer.pad_token_id))
+    if cfg.train.kl_to_base:
+        if not cfg.train.answer_token_only:
+            raise SystemExit("train.kl_to_base needs train.answer_token_only=true (one answer token per row)")
+        print(f"SFT anchored to the base: CE + {cfg.train.kl_to_base} * KL(student || base) at the answer token")
+        trainer = AnchoredSFTTrainer(**common, kl_weight=cfg.train.kl_to_base)
+    else:
+        trainer = Trainer(**common)
     trainer.train(resume_from_checkpoint=_last_checkpoint(cfg.train.output_dir))
     save_final(trainer, proc, cfg.train.output_dir)
 

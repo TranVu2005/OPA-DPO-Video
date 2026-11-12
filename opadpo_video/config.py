@@ -104,6 +104,10 @@ class TrainConfig:
     # Yes/no labels ("Yes." / "No."): train on the answer token alone, the one the evaluation scores,
     # with no "." and no EOS, as Adaptive-SEED's CE on the answer position.
     answer_token_only: bool = False
+    # SFT only, needs answer_token_only: loss = CE + kl_to_base * KL(student || base) over the vocabulary
+    # at the answer position, the base being the same model with the LoRA switched off. 1.0 is the form
+    # and weight of Adaptive-SEED's base anchor (reverse KL, opsd_anchor = 1.0); 0 is plain SFT.
+    kl_to_base: float = 0.0
     save_steps: int = 100
     logging_steps: int = 1
     seed: int = 42

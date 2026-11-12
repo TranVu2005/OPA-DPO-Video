@@ -386,3 +386,18 @@ def test_blind_swap_moves_every_question_to_another_video_in_its_benchmark():
     assert len({to[f"vh{k}a"] for k in range(5)}) == 5  # a permutation, not one video for all
     v = torch.randint(0, 255, (8, 3, 4, 4), dtype=torch.uint8)
     assert blind(v, "black").shape == v.shape and blind(v, "black").sum() == 0 and blind(v, "none") is v
+
+
+def test_anchored_sft_loss_is_ce_at_the_base_and_pulls_back_toward_it():
+    from opadpo_video.losses import anchored_loss
+    base = torch.tensor([[2.0, 0.5, -1.0]])
+    target = torch.tensor([1])
+    loss, ce, kl = anchored_loss(base.clone(), base, target, 1.0)
+    assert torch.allclose(kl, torch.zeros(1), atol=1e-6) and torch.allclose(loss, ce)  # no anchor cost at the base
+    # Far from the base, the KL term pushes back: its gradient opposes moving further from the base logits.
+    far = torch.tensor([[-3.0, 6.0, -1.0]], requires_grad=True)
+    anchored_loss(far, base, target, 1.0)[2].sum().backward()
+    assert far.grad[0, 1] > 0 and far.grad[0, 0] < 0
+    # kl_weight 0 is plain CE.
+    l0, ce0, _ = anchored_loss(far.detach(), base, target, 0.0)
+    assert torch.allclose(l0, ce0)

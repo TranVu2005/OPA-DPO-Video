@@ -148,6 +148,17 @@ phương pháp khác:
 SFT yes/no là Adaptive-SEED khi bỏ phần teacher (cùng dữ liệu, cùng budget), nên SEED − SFT là phần
 đóng góp của teacher.
 
+**Baseline neo vào mô hình gốc.** SFT yes/no và DPO yes/no ở trên được tự do dời ngưỡng yes/no, còn
+Adaptive-SEED bị loss RKL giữ gần mô hình gốc. Để so cùng ràng buộc, báo cáo thêm hai dòng:
+
+| Dòng | Loss | Hệ số |
+|---|---|---|
+| SFT yes/no + KL | CE(nhãn đúng) + λ · KL(student ‖ base), trên toàn vocab ở vị trí đáp án; base = mô hình gốc (LoRA tắt) | λ = 1.0, cố định trước: đúng dạng và trọng số của anchor tới base trong Adaptive-SEED (`rkl`, `opsd_anchor = 1.0`) |
+| DPO yes/no (β chọn trên VAL) | DPO như trên | β ∈ {0.1, 0.5, 1.0}; chọn β có VH_VAL Q acc cao nhất, hoà thì lấy β lớn hơn (gần base hơn); không nhìn VH_TEST / EH khi chọn |
+
+Giữ cả dòng không neo trong phụ lục. Trong OPA-DPO-Video: `KL=1` cho `train_opa.pbs` (output `_kl1`),
+`BETA=0.5` / `BETA=1.0` cho `train_dpo.pbs` (output `_b0.5` / `_b1.0`).
+
 ## 8. Chấm checkpoint bằng script chung
 
 Nếu checkpoint là adapter PEFT LoRA trên đúng model gốc ở mục 6, có thể chấm thẳng bằng script của

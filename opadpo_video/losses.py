@@ -90,3 +90,13 @@ def opa_dpo_loss(pol: dict, ref: dict, w: dict, cfg: DPOConfig) -> tuple[torch.T
 
     metrics = {k: torch.stack(v).mean().item() for k, v in stats.items() if v}
     return torch.stack(losses).mean(), metrics
+
+
+def anchored_loss(student: torch.Tensor, base: torch.Tensor, target: torch.Tensor, kl_weight: float):
+    """Anchored SFT (train.kl_to_base): per-example CE(student, target) + kl_weight * KL(student || base).
+
+    Logits (B, V) at the answer position, target (B,). The reverse KL is Adaptive-SEED's `rkl(base, s)`."""
+    ce = F.cross_entropy(student, target, reduction="none")
+    ls, lb = F.log_softmax(student, -1), F.log_softmax(base, -1)
+    kl = (ls.exp() * (ls - lb)).sum(-1)
+    return ce + kl_weight * kl, ce, kl

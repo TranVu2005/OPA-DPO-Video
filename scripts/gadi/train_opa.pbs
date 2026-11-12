@@ -10,6 +10,8 @@
 #       (docs/unified_config.md: whole SEED TRAIN split, answer-token loss; run prepare_binary.sh first)
 #   qsub -v BINARY=1,FULL=1,LORA=language_attention,MODEL=qwen3 ... -> $OUT/binary_sft_qwen3_full_lang_attn
 #       (ablation: LoRA on LM attention only, projector frozen)
+#   qsub -v BINARY=1,FULL=1,KL=1,MODEL=qwen3 scripts/gadi/train_opa.pbs -> $OUT/binary_sft_qwen3_full_kl1
+#       (SFT anchored to the base: CE + KL * KL(student || base), as Adaptive-SEED's base anchor)
 #PBS -N opadpo_opa
 #PBS -P hn98
 #PBS -q gpuhopper
@@ -31,8 +33,15 @@ case $LORA in seed) LORA_TAG="" ;; language_attention) LORA_TAG=_lang_attn ;;
 NAME=opa; EPOCHS=2; LR=2e-5; GLOBAL_BATCH=128; HP=()
 if [ -n "${BINARY:-}" ]; then
   COMMON=(model.base_model="$BASE_MODEL" work_dir="$OUT/work_binary${FULL:+_all}")
-  NAME=binary_sft$MODEL_TAG${FULL:+_full}$LORA_TAG; EPOCHS=1; LR=1e-4; GLOBAL_BATCH=8
-  HP=(model.lora_targets=$LORA model.lora_rank=16 model.lora_alpha=32 model.lora_dropout=0.05 train.warmup_ratio=0.05)
+  # KL=x anchors SFT to the base (train.kl_to_base, needs FULL=1); the output dir gets _kl<x>.
+  KL=${KL:-0}; KL_TAG=""
+  if [ "$KL" != 0 ]; then
+    [ -n "${FULL:-}" ] || { echo "KL needs FULL=1 (answer-token loss)" >&2; exit 1; }
+    KL_TAG=_kl$KL
+  fi
+  NAME=binary_sft$MODEL_TAG${FULL:+_full}$LORA_TAG$KL_TAG; EPOCHS=1; LR=1e-4; GLOBAL_BATCH=8
+  HP=(model.lora_targets=$LORA model.lora_rank=16 model.lora_alpha=32 model.lora_dropout=0.05 train.warmup_ratio=0.05
+      train.kl_to_base=$KL)
   # FULL=1: exactly docs/unified_config.md section 7 = the whole SEED TRAIN split (temporal +
   # object_relation, from prepare_binary.sh), loss on the answer token only, seed 0.
   if [ -n "${FULL:-}" ]; then HP+=(train.answer_token_only=true train.seed=0); fi

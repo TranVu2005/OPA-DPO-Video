@@ -18,6 +18,9 @@
 #   qsub -v BINARY=1,MASK=shuffle,LR=1e-5 scripts/gadi/train_dpo.pbs  -> $OUT/binary_dpo_shuffle_lr1e-5  ("DPO yes/no + m'")
 #   qsub -v BINARY=1,FULL=1,GAMMA_IF=0,LR=1e-4,MODEL=qwen3 scripts/gadi/train_dpo.pbs -> $OUT/binary_dpo_lr1e-4_qwen3_full
 #       (docs/unified_config.md: whole SEED TRAIN split, answer-token log-probs; run prepare_binary.sh first)
+#   BETA=x      DPO beta for BINARY runs (default 0.1). A larger beta keeps the policy closer to the
+#               reference (the base). Output dir gets _b<x> when BETA is not 0.1, e.g.
+#   qsub -v BINARY=1,FULL=1,GAMMA_IF=0,LR=1e-4,BETA=0.5,MODEL=qwen3 ... -> $OUT/binary_dpo_lr1e-4_qwen3_full_b0.5
 #PBS -N opadpo_dpo
 #PBS -P hn98
 #PBS -q gpuhopper
@@ -44,9 +47,11 @@ if [ -n "${BINARY:-}" ]; then
   GAMMA_IF=${GAMMA_IF:-0.2}
   LR=${LR:-1e-5}; EPOCHS=1; GLOBAL_BATCH=8
   if [ "$GAMMA_IF" = 0 ]; then NAME=binary_dpo_lr$LR$MODEL_TAG; else NAME=binary_dpo_${MASK}_lr$LR$MODEL_TAG; fi
-  NAME=$NAME${FULL:+_full}$LORA_TAG${SUFFIX:-}                  # SUFFIX=_x: rerun into a fresh dir (an existing one resumes)
+  BETA=${BETA:-0.1}; BETA_TAG=""
+  if [ "$BETA" != 0.1 ]; then BETA_TAG=_b$BETA; fi
+  NAME=$NAME${FULL:+_full}$LORA_TAG$BETA_TAG${SUFFIX:-}         # SUFFIX=_x: rerun into a fresh dir (an existing one resumes)
   ADAPTER=none; INIT=null; REF=ref_logps${MODEL_TAG}_base_$MASK
-  EXTRA=(dpo.use_weights=false dpo.gamma_if="$GAMMA_IF" dpo.gamma_anc=0)
+  EXTRA=(dpo.use_weights=false dpo.gamma_if="$GAMMA_IF" dpo.gamma_anc=0 dpo.beta="$BETA")
   HP=(model.lora_targets=$LORA model.lora_rank=16 model.lora_alpha=32 model.lora_dropout=0.05 train.warmup_ratio=0.05)
   # FULL=1: exactly docs/unified_config.md section 7 = the whole SEED TRAIN split (temporal +
   # object_relation, from prepare_binary.sh), log-probs of the answer token only, seed 0.
