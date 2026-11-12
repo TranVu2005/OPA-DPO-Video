@@ -12,14 +12,15 @@
 # run the base blind first:
 #   qsub -v MODEL=qwen3,NAME=base_qwen3,BLIND=black scripts/gadi/eval.pbs
 #   qsub -v MODEL=qwen3,NAME=binary_sft_qwen3_full,ADAPTER=$OUT/binary_sft_qwen3_full/final,BLIND=black scripts/gadi/eval.pbs
+# One eval takes ~13 min on one H200 (819 questions); walltime 1h keeps queue waits short.
 #PBS -N opadpo_eval
 #PBS -P hn98
 #PBS -q gpuhopper
 #PBS -l ngpus=1
 #PBS -l ncpus=12
 #PBS -l mem=160GB
-#PBS -l jobfs=100GB
-#PBS -l walltime=04:00:00
+#PBS -l jobfs=20GB
+#PBS -l walltime=01:00:00
 #PBS -l storage=scratch/hn98+scratch/jp09+gdata/hn98
 #PBS -l wd
 #PBS -j oe
@@ -29,7 +30,9 @@ source scripts/gadi/env.sh
 EXTRA=()
 if [ -n "${ADAPTER:-}" ]; then EXTRA+=(--adapter "$ADAPTER"); fi
 BLIND=${BLIND:-none}; BLIND_TAG=""
-if [ "$BLIND" != none ]; then BLIND_TAG=_blind_$BLIND; NAME=$NAME$BLIND_TAG; EXTRA+=(--blind "$BLIND"); fi
+if [ "$BLIND" != none ]; then  # VH_TEST + EH only: VH_VAL serves threshold calibration, not needed here
+  BLIND_TAG=_blind_$BLIND; NAME=$NAME$BLIND_TAG; EXTRA+=(--blind "$BLIND" --vh_splits VH_TEST)
+fi
 BASE_NAME=base$MODEL_TAG$BLIND_TAG                     # base (Qwen2.5), base_qwen3, base_internvl (+ _blind_<mode>)
 if [ "$NAME" != "$BASE_NAME" ]; then
   if [ -f "$OUT/eval/$BASE_NAME/margins.jsonl" ]; then

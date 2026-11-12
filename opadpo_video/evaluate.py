@@ -141,8 +141,10 @@ def main():
         p.add_argument("--out", default="runs/eval"),
         p.add_argument("--blind", choices=BLIND_MODES, default="none",
                        help="black: all-black frames; swap: another question's video. Measures how much of "
-                            "the accuracy comes from the question text alone")))
-    items = read_jsonl(args.vh) if args.vh else []
+                            "the accuracy comes from the question text alone"),
+        p.add_argument("--vh_splits", nargs="+", default=["VH_VAL", "VH_TEST"],
+                       help="VideoHallucer splits to score (VH_VAL is only needed for threshold calibration)")))
+    items = [i for i in read_jsonl(args.vh) if i["split"] in args.vh_splits] if args.vh else []
     if args.eh_root:
         items += load_eventhallusion(args.eh_root)
     src = swap_videos(items) if args.blind == "swap" else {it["id"]: it["video"] for it in items}
