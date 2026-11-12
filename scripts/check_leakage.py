@@ -10,6 +10,14 @@
 3. Text-only shortcut: a bag-of-words naive Bayes fitted on the TRAIN questions alone (no video) and
    scored on the eval questions. Accuracy far above 0.5 means the answer can be read off the wording,
    so a fine-tuned model can gain on VH without looking at the video.
+4. With --eval_dir and --runs (no GPU, reuses the margins.jsonl of finished evals): accuracy of each run
+   on the questions the text-only model gets right vs wrong, on questions seen / unseen in TRAIN, and how
+   often the run's answer equals the text-only answer. A run that learned the wording gains on "text
+   right", loses on "text wrong" and follows the text-only answer more than the base does; a run that
+   looks at the video gains on both.
+
+  python scripts/check_leakage.py ... --eval_dir $OUT/eval --runs base_qwen3 binary_sft_qwen3_full \
+      binary_dpo_lr1e-4_qwen3_full
 """
 from __future__ import annotations
 
@@ -72,22 +80,25 @@ def main():
     p.add_argument("--eval_vh", required=True, help="eval_vh.jsonl (VH_VAL + VH_TEST)")
     p.add_argument("--eh_root", default=None, help="EventHallusion dir (questions/ + videos)")
     p.add_argument("--no_md5", action="store_true", help="skip hashing the video files")
+    p.add_argument("--eval_dir", default=None, help="$OUT/eval, for section 4")
+    p.add_argument("--runs", nargs="*", default=[], help="eval run names (base first), for section 4")
     a = p.parse_args()
 
     train = [{"video": r["video"], "question": r["prompt"],
               "answer": "yes" if r["response"].lower().startswith("yes") else "no"} for r in read_jsonl(a.train)]
     evals = {}
     for r in read_jsonl(a.eval_vh):
-        evals.setdefault(r["split"], []).append({"video": r["video"], "question": r["question"], "answer": r["answer"]})
+        evals.setdefault(r["split"], []).append({"id": r["id"], "video": r["video"], "question": r["question"],
+                                                 "answer": r["answer"]})
     if a.eh_root:
         eh_videos = [v for v in glob.glob(f"{a.eh_root}/**/*.*", recursive=True)
                      if "__MACOSX" not in v and v.lower().endswith(VIDEO_EXT)]
-        evals["EH"] = [{"video": v, "question": None, "answer": None} for v in eh_videos]
+        evals["EH"] = [{"id": None, "video": v, "question": None, "answer": None} for v in eh_videos]
         for jp in sorted(glob.glob(f"{a.eh_root}/questions/*_questions.json")):
             with open(jp, encoding="utf-8") as f:
                 for v in json.load(f):
-                    for q in v["questions"]:
-                        evals["EH"].append({"video": None, "question": q["question"],
+                    for qi, q in enumerate(v["questions"]):  # same ids as evaluate.load_eventhallusion
+                        evals["EH"].append({"id": f"eh/{v['id']}/{qi}|eh", "video": None, "question": q["question"],
                                             "answer": q["answer"].strip().strip(".").lower()})
 
     print(f"train: {len(train)} questions, {len({t['video'] for t in train})} videos")
@@ -119,8 +130,8 @@ def main():
     for name, rows in evals.items():
         qs = [r for r in rows if r["question"]]
         hit = [r for r in qs if norm(r["question"]) in tr_q]
-        agree = sum(r["answer"] in tr_q[norm(r["question"])] for r in hit)
-        print(f"{name}: {len(hit)}/{len(qs)} questions also in TRAIN ({agree} with the same answer)")
+        same = sum(tr_q[norm(r["question"])] == {r["answer"]} for r in hit)
+        print(f"{name}: {len(hit)}/{len(qs)} questions also in TRAIN ({same} where TRAIN has only this answer)")
         for r in hit[:3]:
             print(f"    {norm(r['question'])!r}: eval {r['answer']}, train {sorted(tr_q[norm(r['question'])])}")
 
@@ -131,6 +142,42 @@ def main():
             acc = sum(nb(r["question"]) == r["answer"] for r in qs) / len(qs)
             yes = sum(r["answer"] == "yes" for r in qs) / len(qs)
             print(f"{name}: acc {acc:.4f} (majority class {max(yes, 1 - yes):.4f})")
+
+    if a.eval_dir and a.runs:
+        runs = {}
+        for run in a.runs:
+            path = os.path.join(a.eval_dir, run, "margins.jsonl")
+            if os.path.exists(path):
+                runs[run] = {r["id"]: r["margin"] for r in read_jsonl(path)}
+            else:
+                print(f"(no {path}, skipped)")
+        print("\n== 4. finished runs split by what the question text alone predicts ==")
+        print("acc = accuracy on the bucket; follow = share of answers equal to the text-only answer")
+        for name in ("VH_TEST", "EH"):
+            qs = [r for r in evals.get(name, []) if r["question"]]
+            if not qs:
+                continue
+            for r in qs:
+                r["nb"] = nb(r["question"])
+            buckets = {"all": qs, "text right": [r for r in qs if r["nb"] == r["answer"]],
+                       "text wrong": [r for r in qs if r["nb"] != r["answer"]]}
+            if name.startswith("VH"):
+                buckets["question in TRAIN"] = [r for r in qs if norm(r["question"]) in tr_q]
+                buckets["question not in TRAIN"] = [r for r in qs if norm(r["question"]) not in tr_q]
+            print(f"\n{name}")
+            print(f"  {'bucket':<22}{'n':>5}" + "".join(f"  {run[:28]:>28}" for run in runs))
+            for b, rows in buckets.items():
+                cells = []
+                for marg in runs.values():
+                    got = [r for r in rows if r["id"] in marg]
+                    if not got:
+                        cells.append(f"{'-':>28}")
+                        continue
+                    pred = ["yes" if marg[r["id"]] > 0 else "no" for r in got]
+                    acc = sum(p == r["answer"] for p, r in zip(pred, got)) / len(got)
+                    follow = sum(p == r["nb"] for p, r in zip(pred, got)) / len(got)
+                    cells.append(f"{f'acc {acc:.4f} follow {follow:.4f}':>28}")
+                print(f"  {b:<22}{len(rows):>5}" + "".join(f"  {c}" for c in cells))
 
 
 if __name__ == "__main__":
