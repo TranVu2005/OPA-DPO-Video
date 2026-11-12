@@ -7,6 +7,11 @@
 # the w2c / c2w reference for that backbone:
 #   qsub -v MODEL=qwen3,NAME=base_qwen3 scripts/gadi/eval.pbs
 #   qsub -v MODEL=qwen3,NAME=binary_sft_qwen3,ADAPTER=$OUT/binary_sft_qwen3/final scripts/gadi/eval.pbs
+# Blind evaluation (BLIND=black|swap): same questions with all-black frames or another question's video.
+# Output goes to $OUT/eval/<NAME>_blind_<mode>; the w2c / c2w reference is base<model>_blind_<mode>, so
+# run the base blind first:
+#   qsub -v MODEL=qwen3,NAME=base_qwen3,BLIND=black scripts/gadi/eval.pbs
+#   qsub -v MODEL=qwen3,NAME=binary_sft_qwen3_full,ADAPTER=$OUT/binary_sft_qwen3_full/final,BLIND=black scripts/gadi/eval.pbs
 #PBS -N opadpo_eval
 #PBS -P hn98
 #PBS -q gpuhopper
@@ -23,7 +28,9 @@ source scripts/gadi/env.sh
 : "${NAME:?qsub -v NAME=...}"
 EXTRA=()
 if [ -n "${ADAPTER:-}" ]; then EXTRA+=(--adapter "$ADAPTER"); fi
-BASE_NAME=base$MODEL_TAG                               # base (Qwen2.5), base_qwen3, base_internvl
+BLIND=${BLIND:-none}; BLIND_TAG=""
+if [ "$BLIND" != none ]; then BLIND_TAG=_blind_$BLIND; NAME=$NAME$BLIND_TAG; EXTRA+=(--blind "$BLIND"); fi
+BASE_NAME=base$MODEL_TAG$BLIND_TAG                     # base (Qwen2.5), base_qwen3, base_internvl (+ _blind_<mode>)
 if [ "$NAME" != "$BASE_NAME" ]; then
   if [ -f "$OUT/eval/$BASE_NAME/margins.jsonl" ]; then
     EXTRA+=(--baseline "$OUT/eval/$BASE_NAME/margins.jsonl")

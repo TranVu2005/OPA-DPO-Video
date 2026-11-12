@@ -11,6 +11,10 @@
   python -m opadpo_video.evaluate --name opadpo --adapter runs/opadpo/final --vh data/eval_vh.jsonl \
       --eh_root $EH_ROOT --baseline runs/eval/base/margins.jsonl
 
+Blind evaluation (--blind black | swap) scores the same questions without their video: all-black
+frames, or the video of another question. What accuracy is left is read from the question text alone;
+what is lost needed the video. Use a separate --name (eval.pbs appends _blind_<mode>).
+
 Writes runs/eval/<name>/margins.jsonl (appended, so a killed job resumes) and results.csv.
 Before trusting adapter numbers, check that the base rows match the `base` rows of SEED's results.csv.
 """
@@ -20,6 +24,7 @@ import csv
 import glob
 import json
 import os
+import random
 from pathlib import Path
 
 import numpy as np
@@ -69,6 +74,30 @@ def load_eventhallusion(root: str, splits=("entire", "mix", "misleading")) -> li
     return items
 
 
+# ----------------------------------------------------------------------------- blind evaluation
+BLIND_MODES = ("none", "black", "swap")
+
+
+def swap_videos(items: list[dict], seed: int = 0) -> dict[str, str]:
+    """item id -> the video of another item, for --blind swap. Videos are permuted within VideoHallucer
+    and within EventHallusion separately (a cycle over the shuffled unique videos), so no question
+    keeps its own video and questions that share a video share the same wrong one."""
+    groups = {}
+    for it in items:
+        groups.setdefault(it["split"].startswith("VH"), set()).add(it["video"])
+    to = {}
+    for vids in groups.values():
+        vids = sorted(vids)
+        random.Random(seed).shuffle(vids)
+        to.update({v: vids[(k + 1) % len(vids)] for k, v in enumerate(vids)})
+    return {it["id"]: to[it["video"]] for it in items}
+
+
+def blind(video: torch.Tensor, mode: str) -> torch.Tensor:
+    """--blind black: same shape and fps, every pixel 0 (uint8 frames before the processor)."""
+    return torch.zeros_like(video) if mode == "black" else video
+
+
 # ----------------------------------------------------------------------------- metrics
 def split_groups(items: list[dict]) -> dict[str, list[dict]]:
     """VH_VAL, VH_TEST, VH_TEST per subset, EH_ALL and each EH split."""
@@ -109,16 +138,20 @@ def main():
         p.add_argument("--vh", default="data/eval_vh.jsonl"),
         p.add_argument("--eh_root", default=None, help="EventHallusion dir (questions/ + videos); omit to skip"),
         p.add_argument("--baseline", default=None, help="margins.jsonl of the base run, for w2c / c2w"),
-        p.add_argument("--out", default="runs/eval")))
+        p.add_argument("--out", default="runs/eval"),
+        p.add_argument("--blind", choices=BLIND_MODES, default="none",
+                       help="black: all-black frames; swap: another question's video. Measures how much of "
+                            "the accuracy comes from the question text alone")))
     items = read_jsonl(args.vh) if args.vh else []
     if args.eh_root:
         items += load_eventhallusion(args.eh_root)
+    src = swap_videos(items) if args.blind == "swap" else {it["id"]: it["video"] for it in items}
     out_dir = Path(args.out) / args.name
     out_dir.mkdir(parents=True, exist_ok=True)
     marg_path = out_dir / "margins.jsonl"
     marg = {r["id"]: r["margin"] for r in read_jsonl(marg_path)} if marg_path.exists() else {}
     todo = [i for i in items if i["id"] not in marg]
-    print(f"{len(items)} items, {len(todo)} to score", flush=True)
+    print(f"{len(items)} items, {len(todo)} to score, blind={args.blind}", flush=True)
 
     if todo:
         proc = load_processor(cfg)
@@ -127,7 +160,8 @@ def main():
         model = load_model(cfg, adapter=args.adapter, device_map={"": 0} if torch.cuda.is_available() else None)
         with open(marg_path, "a", encoding="utf-8") as f, torch.no_grad():
             for n, it in enumerate(todo, 1):
-                video, fps = prepare_video(it["video"], cfg)
+                video, fps = prepare_video(src[it["id"]], cfg)
+                video = blind(video, args.blind)
                 batch, _ = collate_rows([Row(encode_prompt(proc, it["question"].strip() + YN_SUFFIX, video, fps), [])],
                                         tok.pad_token_id)
                 logits = last_logits(model, batch)[0]

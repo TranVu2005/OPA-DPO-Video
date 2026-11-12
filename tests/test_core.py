@@ -372,3 +372,17 @@ def test_collate_rows_internvl_and_qwen3_inputs():
 
     batch, _ = collate_rows([Row(q3(10), []), Row(q3(12), [])], pad_id=0)
     assert batch["video_grid_thw"].shape == (2, 3) and "second_per_grid_ts" not in batch
+
+
+def test_blind_swap_moves_every_question_to_another_video_in_its_benchmark():
+    from opadpo_video.evaluate import blind, swap_videos
+    items = [{"id": f"vh{k}{r}", "split": "VH_TEST", "video": f"v{k}.mp4"} for k in range(5) for r in "ab"]
+    items += [{"id": f"eh{k}", "split": "eh_entire", "video": f"e{k}.mp4"} for k in range(3)]
+    to = swap_videos(items)
+    assert to == swap_videos(items)  # deterministic
+    for it in items:
+        assert to[it["id"]] != it["video"] and to[it["id"]][0] == it["video"][0]  # other video, same benchmark
+    assert all(to[f"vh{k}a"] == to[f"vh{k}b"] for k in range(5))  # a shared video maps to one wrong video
+    assert len({to[f"vh{k}a"] for k in range(5)}) == 5  # a permutation, not one video for all
+    v = torch.randint(0, 255, (8, 3, 4, 4), dtype=torch.uint8)
+    assert blind(v, "black").shape == v.shape and blind(v, "black").sum() == 0 and blind(v, "none") is v
