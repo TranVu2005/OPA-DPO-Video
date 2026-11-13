@@ -12,6 +12,10 @@
 # run the base blind first:
 #   qsub -v MODEL=qwen3,NAME=base_qwen3,BLIND=black scripts/gadi/eval.pbs
 #   qsub -v MODEL=qwen3,NAME=binary_sft_qwen3_full,ADAPTER=$OUT/binary_sft_qwen3_full/final,BLIND=black scripts/gadi/eval.pbs
+# Quick check (QUICK=n): only the first n VH_TEST pairs (2n questions), no EventHallusion, no w2c reference;
+# output in $OUT/eval/quick_<NAME>[_blind_<mode>]. A few minutes, mostly model loading. Compare with the
+# full runs using scripts/compare_blind.py:
+#   qsub -l walltime=00:15:00 -v MODEL=internvl,NAME=base_internvl,BLIND=black,QUICK=20 scripts/gadi/eval.pbs
 # One eval takes ~13 min on one H200 (819 questions) and peaks at ~33GB RAM, 17GB GPU; walltime 1h and
 # mem 64GB keep queue waits short.
 #PBS -N opadpo_eval
@@ -35,15 +39,28 @@ if [ "$BLIND" != none ]; then  # VH_TEST + EH only: VH_VAL serves threshold cali
   BLIND_TAG=_blind_$BLIND; NAME=$NAME$BLIND_TAG; EXTRA+=(--blind "$BLIND" --vh_splits VH_TEST)
 fi
 BASE_NAME=base$MODEL_TAG$BLIND_TAG                     # base (Qwen2.5), base_qwen3, base_internvl (+ _blind_<mode>)
-if [ "$NAME" != "$BASE_NAME" ]; then
+VH_FILE=$DATA/eval_vh.jsonl
+if [ -n "${QUICK:-}" ]; then
+  VH_FILE=$TMPDIR/quick_vh.jsonl
+  python - "$DATA/eval_vh.jsonl" "$VH_FILE" "$QUICK" <<'EOF'
+import json, sys
+src, dst, n = sys.argv[1], sys.argv[2], int(sys.argv[3])
+rows = [json.loads(l) for l in open(src, encoding="utf-8") if l.strip()]
+keep = list(dict.fromkeys(r["pair_id"] for r in rows if r["split"] == "VH_TEST"))[:n]
+with open(dst, "w", encoding="utf-8") as f:
+    f.writelines(json.dumps(r) + "\n" for r in rows if r["split"] == "VH_TEST" and r["pair_id"] in set(keep))
+print(f"QUICK: {len(keep)} VH_TEST pairs -> {dst}")
+EOF
+  NAME=quick_$NAME
+elif [ "$NAME" != "$BASE_NAME" ]; then
   if [ -f "$OUT/eval/$BASE_NAME/margins.jsonl" ]; then
     EXTRA+=(--baseline "$OUT/eval/$BASE_NAME/margins.jsonl")
   else
     echo "no $OUT/eval/$BASE_NAME/margins.jsonl: run NAME=$BASE_NAME first for w2c / c2w" >&2
   fi
 fi
-if [ -d "$EH_ROOT/questions" ]; then EXTRA+=(--eh_root "$EH_ROOT"); fi
-python -m opadpo_video.evaluate --name "$NAME" --vh "$DATA/eval_vh.jsonl" --out "$OUT/eval" \
+if [ -z "${QUICK:-}" ] && [ -d "$EH_ROOT/questions" ]; then EXTRA+=(--eh_root "$EH_ROOT"); fi
+python -m opadpo_video.evaluate --name "$NAME" --vh "$VH_FILE" --out "$OUT/eval" \
   "${EXTRA[@]}" "${COMMON[@]}"
 
 bash scripts/gadi/archive.sh || true
