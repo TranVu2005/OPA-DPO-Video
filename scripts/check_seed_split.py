@@ -42,7 +42,11 @@ def seed_split(seed_repo: str, vh_root: str, cfg: dict) -> dict[str, dict[str, t
     """Adaptive-SEED's TRAIN / VAL / TEST, computed by its own code: {split: {key: sig}}."""
     import numpy as np
 
-    sys.path.insert(0, os.path.join(seed_repo, "src"))
+    # Accept the repo root or its src/ directory.
+    src = seed_repo if os.path.isdir(os.path.join(seed_repo, "seed_video")) else os.path.join(seed_repo, "src")
+    if not os.path.isfile(os.path.join(src, "seed_video", "data", "videohallucer.py")):
+        raise SystemExit(f"no seed_video/data/videohallucer.py under {seed_repo} (give the Adaptive-SEED checkout)")
+    sys.path.insert(0, src)
     from seed_video.data import videohallucer
 
     os.environ["HF_HUB_OFFLINE"] = "1"  # SEED's offline branch: index the local files, download nothing
